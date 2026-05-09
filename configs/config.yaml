@@ -1,0 +1,136 @@
+# =============================================================================
+# ML System Design: Model Serving — Master Configuration
+# =============================================================================
+# Single source of truth for every tunable parameter.
+# All values are loaded once at startup via configs/settings.py.
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
+models:
+  v1:
+    name: "distilbert-base-uncased-finetuned-sst-2-english"
+    version: "v1"
+    description: "DistilBERT fine-tuned on SST-2 (full precision, FP32)"
+    max_length: 512
+    device: "cpu"                # cpu | cuda
+  v2:
+    name: "distilbert-base-uncased-finetuned-sst-2-english"
+    version: "v2"
+    description: "DistilBERT fine-tuned on SST-2 (INT8 dynamic quantization)"
+    max_length: 512
+    device: "cpu"
+    quantized: true              # v2 = same model, INT8 quantized — simulates real version bump
+
+  warmup:
+    num_requests: 10             # dummy inferences after load before /ready flips true
+    dummy_text: "This product exceeded all my expectations and I am very happy with it."
+
+# -----------------------------------------------------------------------------
+# Deployment State Machine
+# -----------------------------------------------------------------------------
+deployment:
+  initial_state: "shadow"        # shadow | canary_5 | canary_25 | canary_50 | full
+
+  canary_traffic_splits:
+    canary_5:   0.05
+    canary_25:  0.25
+    canary_50:  0.50
+    full:       1.00
+
+  auto_progression:
+    enabled: true
+    canary_5_duration_minutes: 5      # promote canary_5 → canary_25 after N clean minutes
+    canary_25_duration_minutes: 10    # promote canary_25 → canary_50 after N clean minutes
+    canary_50_duration_minutes: 15    # promote canary_50 → full after N clean minutes
+
+  rollback:
+    error_rate_threshold: 0.05        # rollback if v2 error rate > 5%
+    latency_p99_multiplier: 2.0       # rollback if v2 p99 > 2x v1 p99
+    min_requests_before_check: 20     # don't rollback on < N requests (avoid noise)
+
+  state_persistence_path: "data/deployment_state.json"
+  audit_log_path: "data/audit_log/transitions.jsonl"
+
+# -----------------------------------------------------------------------------
+# Circuit Breaker
+# -----------------------------------------------------------------------------
+circuit_breaker:
+  failure_threshold: 5           # open circuit after N consecutive failures
+  success_threshold: 2           # close circuit after N successes in half-open state
+  timeout_seconds: 30            # how long to stay open before moving to half-open
+  call_timeout_seconds: 5.0      # individual inference timeout before counting as failure
+
+# -----------------------------------------------------------------------------
+# Redis Cache
+# -----------------------------------------------------------------------------
+cache:
+  host: "redis"
+  port: 6379
+  db: 0
+  ttl_seconds: 300               # cache prediction for 5 minutes
+  max_text_length_for_cache: 1000  # don't cache very long texts (key size)
+  key_prefix: "pred:"
+
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
+monitoring:
+  prometheus:
+    port: 8000                   # metrics exposed on /metrics at same port as API
+
+  # Latency SLOs (milliseconds) — used for Prometheus histogram buckets
+  latency_slo:
+    p50_ms: 50
+    p95_ms: 200
+    p99_ms: 500
+
+  # Disagreement monitoring (shadow mode)
+  disagreement:
+    window_size: 500             # rolling window of last N shadow comparisons
+    alert_threshold: 0.30        # alert if v1/v2 disagree on > 30% of requests
+    min_samples_before_alert: 50
+
+  # Evidently drift detection
+  drift:
+    reference_window_size: 200   # build reference distribution from first N requests
+    detection_window_size: 100   # compare each window of N new requests against reference
+    run_every_n_requests: 50     # run drift check every N requests
+    text_length_drift_threshold: 0.1   # Jensen-Shannon divergence threshold
+    confidence_drift_threshold: 0.1    # JS divergence on confidence score distribution
+
+  # Rollback audit
+  audit:
+    max_entries_in_memory: 1000  # keep last N transitions in memory
+
+# -----------------------------------------------------------------------------
+# API
+# -----------------------------------------------------------------------------
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 1                     # uvicorn workers (1 for shared in-process state)
+  log_level: "info"
+  request_timeout_seconds: 10.0
+
+# -----------------------------------------------------------------------------
+# Gradio UI
+# -----------------------------------------------------------------------------
+gradio:
+  host: "0.0.0.0"
+  port: 7860
+  api_base_url: "http://gateway:8000"   # internal Docker network URL
+  api_base_url_local: "http://localhost:8000"  # for local (non-Docker) runs
+  theme: "soft"
+
+# -----------------------------------------------------------------------------
+# PostgreSQL (audit log persistence)
+# -----------------------------------------------------------------------------
+postgres:
+  host: "postgres"
+  port: 5432
+  database: "model_serving"
+  user: "postgres"
+  password: "postgres"
+  table_audit: "deployment_audit"
+  table_predictions: "prediction_log"

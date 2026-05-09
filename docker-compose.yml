@@ -1,0 +1,207 @@
+# =============================================================================
+# ML System Design: Model Serving — Docker Compose
+# =============================================================================
+# Services:
+#   gateway    — FastAPI inference API (port 8000)
+#   gradio     — Deployment control panel UI (port 7860)
+#   redis      — Prediction cache (port 6379)
+#   postgres   — Audit log persistence (port 5432)
+#   prometheus — Metrics scraping (port 9090)
+#   grafana    — Metrics dashboards (port 3000)
+#   locust     — Load testing UI (port 8089) — optional, profile: load-test
+#
+# Quick start:
+#   docker-compose up --build
+#
+# Access:
+#   FastAPI docs:  http://localhost:8000/docs
+#   Gradio UI:     http://localhost:7860
+#   Prometheus:    http://localhost:9090
+#   Grafana:       http://localhost:3000  (admin / admin)
+#   Locust:        http://localhost:8089  (start load test manually)
+
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# Shared network
+# ---------------------------------------------------------------------------
+networks:
+  serving-net:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Volumes (persistent storage)
+# ---------------------------------------------------------------------------
+volumes:
+  postgres-data:
+  redis-data:
+  grafana-data:
+  hf-cache:            # HuggingFace model weights — cached between restarts
+  deployment-state:    # Deployment state JSON + audit JSONL
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ms_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    volumes:
+      - redis-data:/data
+    networks:
+      - serving-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ms_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: model_serving
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - serving-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d model_serving"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI Gateway ─────────────────────────────────────────────────────────
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ms_gateway
+    restart: unless-stopped
+    command: >
+      uvicorn api.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 1
+      --log-level info
+      --no-access-log
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD: postgres
+      GATEWAY_URL: http://gateway:8000
+      PYTHONPATH: /app
+    volumes:
+      - hf-cache:/app/.cache/huggingface
+      - deployment-state:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - serving-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s    # Give time for model download + warm-up
+      retries: 3
+
+  # ── Gradio Control Panel ────────────────────────────────────────────────────
+  gradio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ms_gradio
+    restart: unless-stopped
+    command: python gradio_app/app.py
+    ports:
+      - "7860:7860"
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      GRADIO_HOST: "0.0.0.0"
+      GRADIO_PORT: "7860"
+      PYTHONPATH: /app
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - serving-net
+
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: ms_prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - gateway
+    networks:
+      - serving-net
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: ms_grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/model-serving.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - serving-net
+
+  # ── Locust (optional — start with --profile load-test) ─────────────────────
+  locust:
+    image: locustio/locust:2.27.0
+    container_name: ms_locust
+    profiles:
+      - load-test
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./tests:/mnt/locust:ro
+    command: >
+      -f /mnt/locust/locustfile.py
+      --host http://gateway:8000
+      --web-host 0.0.0.0
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - serving-net

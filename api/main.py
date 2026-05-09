@@ -1,0 +1,638 @@
+"""
+FastAPI application — the central serving layer.
+
+Lifecycle (FastAPI lifespan):
+  1. Configure structlog (JSON logging)
+  2. Load model v1, run warm-up → flip v1 /ready
+  3. Load model v2, run warm-up → flip v2 /ready
+  4. Connect Redis cache
+  5. Connect PostgreSQL (audit persistence)
+  6. Load persisted deployment state from disk
+  7. Start auto-progression background thread
+  8. Inject models into router
+  → Server begins accepting traffic (all endpoints live)
+
+  On shutdown:
+  → Stop auto-progression thread
+  → Log shutdown event
+
+Endpoints:
+  POST /predict                   — main inference endpoint
+  GET  /health                    — liveness probe (always returns 200 if process alive)
+  GET  /ready                     — readiness probe (200 only after warm-up complete)
+  GET  /deployment/status         — deployment state + metrics
+  POST /deployment/promote        — manually advance to next stage
+  POST /deployment/rollback       — manually roll back to shadow
+  GET  /deployment/audit          — full audit log of state transitions
+  GET  /monitoring/disagreement   — shadow mode v1/v2 disagreement stats
+  GET  /monitoring/drift          — Evidently drift detection status
+  GET  /monitoring/cache          — Redis cache hit/miss stats
+  GET  /circuit-breaker/status    — circuit breaker state
+  POST /circuit-breaker/reset     — manually reset circuit breaker
+  GET  /metrics                   — Prometheus metrics (scraped by prometheus container)
+"""
+
+from __future__ import annotations
+
+import time
+from contextlib import asynccontextmanager
+from typing import Optional
+
+import structlog
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from prometheus_client import make_asgi_app
+
+from api.middleware import TraceIDMiddleware, configure_structlog
+from api.schemas import (
+    AuditLogResponse,
+    CacheStatsResponse,
+    DeploymentStatusResponse,
+    DisagreementStatsResponse,
+    DriftStatusResponse,
+    HealthResponse,
+    PredictRequest,
+    PredictResponse,
+    PromoteResponse,
+    ReadinessResponse,
+    RollbackResponse,
+)
+from cache.redis_cache import PredictionCache
+from configs.settings import settings
+from deployment.circuit_breaker import circuit_breaker
+from deployment.router import router as request_router
+from deployment.state_machine import state_machine
+from models.model_v1 import ModelV1
+from models.model_v2 import ModelV2
+from monitoring.disagreement import disagreement_monitor
+from monitoring.drift import drift_detector
+from monitoring.metrics import (
+    CACHE_HITS,
+    CACHE_MISSES,
+    INFERENCE_ERRORS,
+    INFERENCE_LATENCY,
+    INFERENCE_REQUESTS,
+    MODEL_READY,
+    MODEL_WARMUP_LATENCY,
+    update_deployment_gauges,
+    update_circuit_breaker_gauge,
+)
+
+log = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Module-level singletons (shared across all requests)
+# ---------------------------------------------------------------------------
+model_v1 = ModelV1()
+model_v2 = ModelV2()
+cache = PredictionCache()
+
+# Warm-up results stored for /ready endpoint
+_warmup_results: dict = {}
+_startup_time: float = 0.0
+
+# PostgreSQL engine (optional — degrades gracefully if unavailable)
+_db_engine = None
+
+
+# ---------------------------------------------------------------------------
+# Lifespan (replaces @app.on_event deprecated pattern)
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan context manager.
+    Everything before yield = startup. Everything after = shutdown.
+    """
+    global _startup_time, _db_engine
+
+    configure_structlog()
+    _startup_time = time.monotonic()
+    log.info("startup_begin", service="ml-model-serving")
+
+    # ── Model v1 ────────────────────────────────────────────────────────────
+    log.info("loading_v1")
+    model_v1.load()
+    warmup_v1 = model_v1.warmup(
+        dummy_text=settings.models.warmup.dummy_text,
+        num_requests=settings.models.warmup.num_requests,
+    )
+    _warmup_results["v1"] = {
+        "first_latency_ms": warmup_v1.first_latency_ms,
+        "last_latency_ms": warmup_v1.last_latency_ms,
+        "speedup_ratio": warmup_v1.speedup_ratio,
+    }
+    MODEL_READY.labels(model_version="v1").set(1)
+    MODEL_WARMUP_LATENCY.labels(model_version="v1", pass_number="first").set(
+        warmup_v1.first_latency_ms / 1000.0
+    )
+    MODEL_WARMUP_LATENCY.labels(model_version="v1", pass_number="last").set(
+        warmup_v1.last_latency_ms / 1000.0
+    )
+    log.info(
+        "v1_ready",
+        first_latency_ms=warmup_v1.first_latency_ms,
+        last_latency_ms=warmup_v1.last_latency_ms,
+        speedup_ratio=warmup_v1.speedup_ratio,
+    )
+
+    # ── Model v2 ────────────────────────────────────────────────────────────
+    log.info("loading_v2")
+    model_v2.load()
+    warmup_v2 = model_v2.warmup(
+        dummy_text=settings.models.warmup.dummy_text,
+        num_requests=settings.models.warmup.num_requests,
+    )
+    _warmup_results["v2"] = {
+        "first_latency_ms": warmup_v2.first_latency_ms,
+        "last_latency_ms": warmup_v2.last_latency_ms,
+        "speedup_ratio": warmup_v2.speedup_ratio,
+    }
+    MODEL_READY.labels(model_version="v2").set(1)
+    MODEL_WARMUP_LATENCY.labels(model_version="v2", pass_number="first").set(
+        warmup_v2.first_latency_ms / 1000.0
+    )
+    MODEL_WARMUP_LATENCY.labels(model_version="v2", pass_number="last").set(
+        warmup_v2.last_latency_ms / 1000.0
+    )
+    log.info(
+        "v2_ready",
+        first_latency_ms=warmup_v2.first_latency_ms,
+        last_latency_ms=warmup_v2.last_latency_ms,
+        speedup_ratio=warmup_v2.speedup_ratio,
+        quantized=True,
+    )
+
+    # ── Redis cache ──────────────────────────────────────────────────────────
+    cache.connect()
+
+    # ── PostgreSQL (audit) ───────────────────────────────────────────────────
+    try:
+        import sqlalchemy
+
+        conn_str = (
+            f"postgresql+psycopg2://{settings.postgres.user}:"
+            f"{settings.postgres.password}@{settings.postgres.host}:"
+            f"{settings.postgres.port}/{settings.postgres.database}"
+        )
+        _db_engine = sqlalchemy.create_engine(conn_str, pool_pre_ping=True)
+        _db_engine.connect()
+        log.info("postgres_connected", host=settings.postgres.host)
+    except Exception as e:
+        log.warning("postgres_unavailable", error=str(e), fallback="file_audit_only")
+        _db_engine = None
+
+    # ── Deployment state ────────────────────────────────────────────────────
+    state_machine.load_persisted_state()
+    state_machine.start_auto_progression()
+    update_deployment_gauges(
+        state_machine.state.value,
+        state_machine.v2_traffic_fraction,
+    )
+    update_circuit_breaker_gauge(circuit_breaker.state.value)
+
+    # ── Inject models into router ────────────────────────────────────────────
+    request_router.set_models(model_v1, model_v2)
+
+    log.info(
+        "startup_complete",
+        deployment_state=state_machine.state.value,
+        redis=cache.is_available,
+        postgres=_db_engine is not None,
+    )
+
+    yield  # ── Server is live ──────────────────────────────────────────────
+
+    # ── Shutdown ─────────────────────────────────────────────────────────────
+    log.info("shutdown_begin")
+    state_machine.stop()
+    log.info("shutdown_complete")
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+app = FastAPI(
+    title="ML System Design: Model Serving",
+    description=(
+        "Production-grade model serving with shadow mode, canary deployment, "
+        "circuit breaker, Evidently drift detection, and disagreement monitoring."
+    ),
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# Add trace ID middleware
+app.add_middleware(TraceIDMiddleware)
+
+# Mount Prometheus metrics at /metrics
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
+
+
+# ---------------------------------------------------------------------------
+# POST /predict — main inference endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post(
+    "/predict",
+    response_model=PredictResponse,
+    summary="Classify sentiment of input text",
+    tags=["Inference"],
+)
+async def predict(request_body: PredictRequest, request: Request) -> PredictResponse:
+    """
+    Classify the sentiment of input text.
+
+    Routing is determined by the current deployment state:
+    - **shadow**: v1 serves user, v2 runs silently for comparison
+    - **canary**: weighted random routing (5/25/50% to v2)
+    - **full**: all traffic to v2 (v1 fallback if circuit opens)
+    - **rolled_back**: all traffic to v1
+
+    Cache: identical inputs return cached results in <5ms.
+    """
+    if not model_v1.is_ready or not model_v2.is_ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Models not ready. Check /ready endpoint.",
+        )
+
+    trace_id = getattr(request.state, "trace_id", "unknown")
+    text = request_body.text
+    deployment_state = state_machine.state.value
+
+    # ── Cache check ───────────────────────────────────────────────────────
+    # Determine which model version will likely serve (for cache key)
+    # In shadow/rolled_back/canary: primary is v1; in full: primary is v2
+    primary_version = "v2" if deployment_state == "full" else "v1"
+    cached = cache.get(text, primary_version)
+    if cached:
+        CACHE_HITS.labels(model_version=primary_version).inc()
+        INFERENCE_REQUESTS.labels(
+            model_version=f"{primary_version}_cached",
+            deployment_state=deployment_state,
+        ).inc()
+        return PredictResponse(
+            label=cached["label"],
+            score=cached["score"],
+            model_version=cached["model_version"],
+            model_used=cached.get("model_used", primary_version),
+            deployment_state=deployment_state,
+            latency_ms=0.0,
+            cache_hit=True,
+            trace_id=trace_id,
+        )
+    CACHE_MISSES.labels(model_version=primary_version).inc()
+
+    # ── Route request ─────────────────────────────────────────────────────
+    t0 = time.perf_counter()
+    try:
+        user_result, shadow_v2_result, model_used = await request_router.route(
+            text=text,
+            trace_id=trace_id,
+        )
+    except Exception as e:
+        INFERENCE_ERRORS.labels(
+            model_version="router",
+            error_type=type(e).__name__,
+        ).inc()
+        log.error("predict_router_error", error=str(e), trace_id=trace_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Inference failed: {str(e)}",
+        )
+    total_latency_ms = (time.perf_counter() - t0) * 1000.0
+
+    # ── Prometheus metrics ────────────────────────────────────────────────
+    INFERENCE_LATENCY.labels(
+        model_version=user_result.model_version,
+        deployment_state=deployment_state,
+        cache_hit="false",
+    ).observe(user_result.latency_ms / 1000.0)
+
+    INFERENCE_REQUESTS.labels(
+        model_version=model_used,
+        deployment_state=deployment_state,
+    ).inc()
+
+    # ── Disagreement monitoring (shadow mode) ─────────────────────────────
+    if shadow_v2_result is not None:
+        disagreement_monitor.record(
+            v1_label=user_result.label,
+            v2_label=shadow_v2_result.label,
+            v1_score=user_result.score,
+            v2_score=shadow_v2_result.score,
+            input_length=user_result.input_length,
+        )
+
+    # ── Drift detection (track input distribution) ─────────────────────────
+    drift_detector.record(
+        text_length=user_result.input_length,
+        confidence=user_result.score,
+    )
+
+    # ── Cache write ───────────────────────────────────────────────────────
+    cache.set(
+        text,
+        user_result.model_version,
+        {
+            "label": user_result.label,
+            "score": user_result.score,
+            "model_version": user_result.model_version,
+            "model_used": model_used,
+        },
+    )
+
+    # ── Update circuit breaker gauge ──────────────────────────────────────
+    update_circuit_breaker_gauge(circuit_breaker.state.value)
+    update_deployment_gauges(
+        state_machine.state.value,
+        state_machine.v2_traffic_fraction,
+    )
+
+    log.info(
+        "predict_complete",
+        label=user_result.label,
+        score=round(user_result.score, 4),
+        model_used=model_used,
+        deployment_state=deployment_state,
+        latency_ms=round(user_result.latency_ms, 1),
+        total_latency_ms=round(total_latency_ms, 1),
+        trace_id=trace_id,
+    )
+
+    return PredictResponse(
+        label=user_result.label,
+        score=round(user_result.score, 4),
+        model_version=user_result.model_version,
+        model_used=model_used,
+        deployment_state=deployment_state,
+        latency_ms=round(user_result.latency_ms, 1),
+        cache_hit=False,
+        trace_id=trace_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /health — liveness probe
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Liveness probe",
+    tags=["Health"],
+)
+async def health() -> HealthResponse:
+    """
+    Liveness probe. Returns 200 if the process is alive.
+    Kubernetes kills and restarts the pod if this returns non-200.
+    Does NOT check model readiness — use /ready for that.
+    """
+    return HealthResponse(
+        status="ok",
+        uptime_seconds=round(time.monotonic() - _startup_time, 1),
+        redis_available=cache.is_available,
+        deployment_state=state_machine.state.value,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /ready — readiness probe
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/ready",
+    summary="Readiness probe",
+    tags=["Health"],
+)
+async def ready() -> JSONResponse:
+    """
+    Readiness probe. Returns 200 only after both models have completed warm-up.
+
+    Kubernetes will NOT send traffic to this pod until this returns 200.
+    This prevents the cold JIT-compilation penalty from hitting real users.
+
+    Warm-up effect: first inference = 200-500ms (JIT compile + cache cold)
+                    after warm-up  = 30-80ms   (hot path)
+    """
+    v1_ready = model_v1.is_ready
+    v2_ready = model_v2.is_ready
+    both_ready = v1_ready and v2_ready
+
+    body = ReadinessResponse(
+        ready=both_ready,
+        v1_ready=v1_ready,
+        v2_ready=v2_ready,
+        warmup_details=_warmup_results,
+    )
+
+    return JSONResponse(
+        content=body.model_dump(),
+        status_code=200 if both_ready else 503,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deployment control endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/deployment/status",
+    response_model=DeploymentStatusResponse,
+    summary="Current deployment state and per-version metrics",
+    tags=["Deployment"],
+)
+async def deployment_status() -> DeploymentStatusResponse:
+    """
+    Returns the full deployment state snapshot including:
+    - Current state (shadow / canary_5 / etc.)
+    - v2 traffic fraction
+    - v2 error rate and p99 latency (used for rollback decisions)
+    - Circuit breaker state
+    """
+    sm_status = state_machine.get_status()
+    cb_status = circuit_breaker.get_status()
+    return DeploymentStatusResponse(
+        **sm_status,
+        circuit_breaker=cb_status,
+    )
+
+
+@app.post(
+    "/deployment/promote",
+    response_model=PromoteResponse,
+    summary="Manually promote to next deployment stage",
+    tags=["Deployment"],
+)
+async def promote() -> PromoteResponse:
+    """
+    Manually advance deployment state: shadow → canary_5 → canary_25 → canary_50 → full.
+    Auto-progression also does this automatically on a timer (configurable).
+    """
+    result = state_machine.promote(triggered_by="manual")
+    update_deployment_gauges(
+        state_machine.state.value,
+        state_machine.v2_traffic_fraction,
+    )
+    return PromoteResponse(**result)
+
+
+@app.post(
+    "/deployment/rollback",
+    response_model=RollbackResponse,
+    summary="Manually roll back to shadow mode",
+    tags=["Deployment"],
+)
+async def rollback() -> RollbackResponse:
+    """
+    Immediately roll back v2 to shadow mode.
+    All traffic returns to v1. Redis cache is flushed to remove any v2 predictions.
+    """
+    result = state_machine.rollback(trigger="manual_rollback", note="Triggered via API")
+    flushed = cache.flush()
+    update_deployment_gauges(
+        state_machine.state.value,
+        state_machine.v2_traffic_fraction,
+    )
+    return RollbackResponse(**result, cache_flushed=flushed > 0)
+
+
+@app.get(
+    "/deployment/audit",
+    response_model=AuditLogResponse,
+    summary="Deployment state transition audit log",
+    tags=["Deployment"],
+)
+async def audit_log() -> AuditLogResponse:
+    """
+    Returns all deployment state transitions with timestamps, triggers,
+    and per-version metrics at the time of each event.
+
+    Every auto-rollback, manual promotion, and auto-progression is logged here.
+    """
+    entries = state_machine.get_audit_log()
+    return AuditLogResponse(entries=entries, total_entries=len(entries))
+
+
+# ---------------------------------------------------------------------------
+# Monitoring endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/monitoring/disagreement",
+    response_model=DisagreementStatsResponse,
+    summary="Shadow mode v1 vs v2 disagreement rate",
+    tags=["Monitoring"],
+)
+async def disagreement_stats() -> DisagreementStatsResponse:
+    """
+    In shadow mode, v1 and v2 both run on every request.
+    This endpoint shows how often they disagree on the predicted label.
+
+    High disagreement (>30%) before promoting to canary is a red flag.
+    """
+    stats = disagreement_monitor.get_stats()
+    return DisagreementStatsResponse(**stats)
+
+
+@app.get(
+    "/monitoring/drift",
+    response_model=DriftStatusResponse,
+    summary="Evidently input distribution drift detection status",
+    tags=["Monitoring"],
+)
+async def drift_status() -> DriftStatusResponse:
+    """
+    Evidently AI drift detection status.
+    Compares the current input distribution (text lengths, confidence scores)
+    against the reference window (first N requests).
+
+    Drift signals: text_length drift (different types of inputs) and
+    confidence_score drift (model calibration change).
+    """
+    status_data = drift_detector.get_status()
+    return DriftStatusResponse(**status_data)
+
+
+@app.get(
+    "/monitoring/cache",
+    response_model=CacheStatsResponse,
+    summary="Redis cache performance stats",
+    tags=["Monitoring"],
+)
+async def cache_stats() -> CacheStatsResponse:
+    """Cache hit rate and error counts since server start."""
+    stats = cache.stats()
+    return CacheStatsResponse(**stats)
+
+
+@app.get(
+    "/monitoring/disagreement/recent",
+    summary="Recent v1 vs v2 disagreement cases",
+    tags=["Monitoring"],
+)
+async def recent_disagreements(n: int = 20) -> dict:
+    """
+    Returns the N most recent cases where v1 and v2 predicted different labels.
+    Useful for manual inspection: are the disagreements on borderline cases
+    or are they systematic errors?
+    """
+    return {
+        "recent_disagreements": disagreement_monitor.get_recent_disagreements(n),
+        "n_requested": n,
+    }
+
+
+@app.get(
+    "/monitoring/drift/history",
+    summary="Full drift detection history",
+    tags=["Monitoring"],
+)
+async def drift_history() -> dict:
+    """All historical drift check results since server start."""
+    return {"history": drift_detector.get_history()}
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get(
+    "/circuit-breaker/status",
+    summary="Circuit breaker state and counters",
+    tags=["Circuit Breaker"],
+)
+async def cb_status() -> dict:
+    """
+    Returns circuit breaker state: closed | open | half_open.
+    If open, v2 is blocked and all traffic falls back to v1.
+    """
+    return circuit_breaker.get_status()
+
+
+@app.post(
+    "/circuit-breaker/reset",
+    summary="Manually reset circuit breaker to CLOSED",
+    tags=["Circuit Breaker"],
+)
+async def cb_reset() -> dict:
+    """
+    Manually close the circuit breaker after a v2 fix.
+    Only use this after confirming the underlying v2 issue is resolved.
+    """
+    circuit_breaker.reset()
+    update_circuit_breaker_gauge(circuit_breaker.state.value)
+    return {"ok": True, "state": circuit_breaker.state.value}
