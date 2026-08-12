@@ -3,14 +3,15 @@ FastAPI application — the central serving layer.
 
 Lifecycle (FastAPI lifespan):
   1. Configure structlog (JSON logging)
-  2. Load model v1, run warm-up → flip v1 /ready
-  3. Load model v2, run warm-up → flip v2 /ready
-  4. Connect Redis cache
-  5. Connect PostgreSQL (audit persistence)
-  6. Load persisted deployment state from disk
-  7. Start auto-progression background thread
-  8. Inject models into router
-  → Server begins accepting traffic (all endpoints live)
+  2. Start the model loader on a background thread (v1 → warm-up → v2 → warm-up).
+     Startup does not block on it, so the port binds in under a second and the
+     load is observable through /ready rather than hidden inside a dead socket.
+  3. Connect the prediction cache (Redis, else in-process)
+  4. Connect PostgreSQL (audit persistence)
+  5. Load deployment state (from disk, or in-memory when EPHEMERAL_STATE=1)
+  6. Start auto-progression background thread
+  7. Inject models into router
+  → Server begins accepting traffic; /predict returns 503 until /ready is 200
 
   On shutdown:
   → Stop auto-progression thread
@@ -34,6 +35,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -94,6 +97,105 @@ _startup_time: float = 0.0
 # PostgreSQL engine (optional — degrades gracefully if unavailable)
 _db_engine = None
 
+# Loading two transformer models and warming them takes tens of seconds. Doing
+# that inside lifespan means the socket is not bound until it finishes, so on a
+# scale-to-zero runtime the first visitor after an idle period stares at a blank
+# tab for the whole load with no way to tell a slow start from a dead service.
+#
+# Loading on a background thread binds the port immediately and turns that wait
+# into something observable: /health answers at once, /ready keeps returning 503
+# with the current stage until warm-up completes. That is what a readiness probe
+# is for — this just lets the probe do its job.
+_load_stage: str = "not_started"
+_load_error: Optional[str] = None
+_load_started_at: float = 0.0
+LOAD_STAGES = (
+    "not_started",
+    "loading_v1",
+    "warming_v1",
+    "loading_v2",
+    "warming_v2",
+    "ready",
+    "failed",
+)
+
+
+def _load_models() -> None:
+    """Load and warm both models. Runs on a background thread."""
+    global _load_stage, _load_error
+
+    try:
+        # ── Model v1 ────────────────────────────────────────────────────────
+        _load_stage = "loading_v1"
+        log.info("loading_v1")
+        model_v1.load()
+
+        _load_stage = "warming_v1"
+        warmup_v1 = model_v1.warmup(
+            dummy_text=settings.models.warmup.dummy_text,
+            num_requests=settings.models.warmup.num_requests,
+        )
+        _warmup_results["v1"] = {
+            "first_latency_ms": warmup_v1.first_latency_ms,
+            "last_latency_ms": warmup_v1.last_latency_ms,
+            "speedup_ratio": warmup_v1.speedup_ratio,
+        }
+        MODEL_READY.labels(model_version="v1").set(1)
+        MODEL_WARMUP_LATENCY.labels(model_version="v1", pass_number="first").set(
+            warmup_v1.first_latency_ms / 1000.0
+        )
+        MODEL_WARMUP_LATENCY.labels(model_version="v1", pass_number="last").set(
+            warmup_v1.last_latency_ms / 1000.0
+        )
+        log.info(
+            "v1_ready",
+            first_latency_ms=warmup_v1.first_latency_ms,
+            last_latency_ms=warmup_v1.last_latency_ms,
+            speedup_ratio=warmup_v1.speedup_ratio,
+        )
+
+        # ── Model v2 ────────────────────────────────────────────────────────
+        _load_stage = "loading_v2"
+        log.info("loading_v2")
+        model_v2.load()
+
+        _load_stage = "warming_v2"
+        warmup_v2 = model_v2.warmup(
+            dummy_text=settings.models.warmup.dummy_text,
+            num_requests=settings.models.warmup.num_requests,
+        )
+        _warmup_results["v2"] = {
+            "first_latency_ms": warmup_v2.first_latency_ms,
+            "last_latency_ms": warmup_v2.last_latency_ms,
+            "speedup_ratio": warmup_v2.speedup_ratio,
+        }
+        MODEL_READY.labels(model_version="v2").set(1)
+        MODEL_WARMUP_LATENCY.labels(model_version="v2", pass_number="first").set(
+            warmup_v2.first_latency_ms / 1000.0
+        )
+        MODEL_WARMUP_LATENCY.labels(model_version="v2", pass_number="last").set(
+            warmup_v2.last_latency_ms / 1000.0
+        )
+        log.info(
+            "v2_ready",
+            first_latency_ms=warmup_v2.first_latency_ms,
+            last_latency_ms=warmup_v2.last_latency_ms,
+            speedup_ratio=warmup_v2.speedup_ratio,
+            quantized=True,
+        )
+
+        _load_stage = "ready"
+        log.info(
+            "models_ready",
+            elapsed_seconds=round(time.monotonic() - _load_started_at, 1),
+        )
+    except Exception as e:
+        # A failed load must be loud. /ready reports the exception instead of
+        # holding at 503 forever, which would read identically to a slow start.
+        _load_stage = "failed"
+        _load_error = f"{type(e).__name__}: {e}"
+        log.error("model_load_failed", error=_load_error, exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Lifespan (replaces @app.on_event deprecated pattern)
@@ -106,83 +208,44 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan context manager.
     Everything before yield = startup. Everything after = shutdown.
     """
-    global _startup_time, _db_engine
+    global _startup_time, _db_engine, _load_started_at
 
     configure_structlog()
     _startup_time = time.monotonic()
+    _load_started_at = _startup_time
     log.info("startup_begin", service="ml-model-serving")
 
-    # ── Model v1 ────────────────────────────────────────────────────────────
-    log.info("loading_v1")
-    model_v1.load()
-    warmup_v1 = model_v1.warmup(
-        dummy_text=settings.models.warmup.dummy_text,
-        num_requests=settings.models.warmup.num_requests,
-    )
-    _warmup_results["v1"] = {
-        "first_latency_ms": warmup_v1.first_latency_ms,
-        "last_latency_ms": warmup_v1.last_latency_ms,
-        "speedup_ratio": warmup_v1.speedup_ratio,
-    }
-    MODEL_READY.labels(model_version="v1").set(1)
-    MODEL_WARMUP_LATENCY.labels(model_version="v1", pass_number="first").set(
-        warmup_v1.first_latency_ms / 1000.0
-    )
-    MODEL_WARMUP_LATENCY.labels(model_version="v1", pass_number="last").set(
-        warmup_v1.last_latency_ms / 1000.0
-    )
-    log.info(
-        "v1_ready",
-        first_latency_ms=warmup_v1.first_latency_ms,
-        last_latency_ms=warmup_v1.last_latency_ms,
-        speedup_ratio=warmup_v1.speedup_ratio,
-    )
-
-    # ── Model v2 ────────────────────────────────────────────────────────────
-    log.info("loading_v2")
-    model_v2.load()
-    warmup_v2 = model_v2.warmup(
-        dummy_text=settings.models.warmup.dummy_text,
-        num_requests=settings.models.warmup.num_requests,
-    )
-    _warmup_results["v2"] = {
-        "first_latency_ms": warmup_v2.first_latency_ms,
-        "last_latency_ms": warmup_v2.last_latency_ms,
-        "speedup_ratio": warmup_v2.speedup_ratio,
-    }
-    MODEL_READY.labels(model_version="v2").set(1)
-    MODEL_WARMUP_LATENCY.labels(model_version="v2", pass_number="first").set(
-        warmup_v2.first_latency_ms / 1000.0
-    )
-    MODEL_WARMUP_LATENCY.labels(model_version="v2", pass_number="last").set(
-        warmup_v2.last_latency_ms / 1000.0
-    )
-    log.info(
-        "v2_ready",
-        first_latency_ms=warmup_v2.first_latency_ms,
-        last_latency_ms=warmup_v2.last_latency_ms,
-        speedup_ratio=warmup_v2.speedup_ratio,
-        quantized=True,
-    )
+    # ── Models (background) ─────────────────────────────────────────────────
+    # Kicked off here, awaited by nobody. /ready is the gate on model traffic.
+    threading.Thread(target=_load_models, daemon=True, name="model-loader").start()
 
     # ── Redis cache ──────────────────────────────────────────────────────────
     cache.connect()
 
     # ── PostgreSQL (audit) ───────────────────────────────────────────────────
-    try:
-        import sqlalchemy
-
-        conn_str = (
-            f"postgresql+psycopg2://{settings.postgres.user}:"
-            f"{settings.postgres.password}@{settings.postgres.host}:"
-            f"{settings.postgres.port}/{settings.postgres.database}"
-        )
-        _db_engine = sqlalchemy.create_engine(conn_str, pool_pre_ping=True)
-        _db_engine.connect()
-        log.info("postgres_connected", host=settings.postgres.host)
-    except Exception as e:
-        log.warning("postgres_unavailable", error=str(e), fallback="file_audit_only")
+    # Same reasoning as the cache: an empty POSTGRES_HOST means there is no
+    # Postgres to reach, so skip the connect rather than spend cold-start
+    # seconds failing to resolve it.
+    if not settings.postgres.host:
+        log.info("postgres_not_configured", fallback="in_memory_audit_only")
         _db_engine = None
+    else:
+        try:
+            import sqlalchemy
+
+            conn_str = (
+                f"postgresql+psycopg2://{settings.postgres.user}:"
+                f"{settings.postgres.password}@{settings.postgres.host}:"
+                f"{settings.postgres.port}/{settings.postgres.database}"
+            )
+            _db_engine = sqlalchemy.create_engine(conn_str, pool_pre_ping=True)
+            _db_engine.connect()
+            log.info("postgres_connected", host=settings.postgres.host)
+        except Exception as e:
+            log.warning(
+                "postgres_unavailable", error=str(e), fallback="file_audit_only"
+            )
+            _db_engine = None
 
     # ── Deployment state ────────────────────────────────────────────────────
     state_machine.load_persisted_state()
@@ -199,8 +262,9 @@ async def lifespan(app: FastAPI):
     log.info(
         "startup_complete",
         deployment_state=state_machine.state.value,
-        redis=cache.is_available,
+        cache_backend=cache.backend,
         postgres=_db_engine is not None,
+        models=_load_stage,  # still loading — /ready is the gate
     )
 
     yield  # ── Server is live ──────────────────────────────────────────────
@@ -261,7 +325,11 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
     if not model_v1.is_ready or not model_v2.is_ready:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Models not ready. Check /ready endpoint.",
+            detail=(
+                f"Models not ready (stage: {_load_stage}"
+                + (f", error: {_load_error}" if _load_error else "")
+                + "). Poll /ready."
+            ),
         )
 
     trace_id = getattr(request.state, "trace_id", "unknown")
@@ -398,9 +466,14 @@ async def health() -> HealthResponse:
     Does NOT check model readiness — use /ready for that.
     """
     return HealthResponse(
-        status="ok",
+        status="ok" if _load_stage == "ready" else "degraded",
         uptime_seconds=round(time.monotonic() - _startup_time, 1),
-        redis_available=cache.is_available,
+        # Reports Redis specifically, not "some cache is up" — the in-process
+        # fallback keeps the feature alive but is not Redis, and conflating the
+        # two would hide a real outage behind a working demo.
+        redis_available=cache.backend == "redis",
+        cache_backend=cache.backend,
+        models_stage=_load_stage,
         deployment_state=state_machine.state.value,
     )
 
@@ -424,6 +497,11 @@ async def ready() -> JSONResponse:
 
     Warm-up effect: first inference = 200-500ms (JIT compile + cache cold)
                     after warm-up  = 30-80ms   (hot path)
+
+    While models are still loading this returns 503 with the current stage and
+    elapsed seconds, so a caller can show progress instead of guessing whether
+    the service is slow or broken. A load that raises returns stage "failed"
+    with the exception rather than holding at 503 indefinitely.
     """
     v1_ready = model_v1.is_ready
     v2_ready = model_v2.is_ready
@@ -434,6 +512,11 @@ async def ready() -> JSONResponse:
         v1_ready=v1_ready,
         v2_ready=v2_ready,
         warmup_details=_warmup_results,
+        stage=_load_stage,
+        load_elapsed_seconds=(
+            round(time.monotonic() - _load_started_at, 1) if _load_started_at else 0.0
+        ),
+        load_error=_load_error,
     )
 
     return JSONResponse(
@@ -636,3 +719,43 @@ async def cb_reset() -> dict:
     circuit_breaker.reset()
     update_circuit_breaker_gauge(circuit_breaker.state.value)
     return {"ok": True, "state": circuit_breaker.state.value}
+
+
+# ---------------------------------------------------------------------------
+# Gradio control panel (same process, same port)
+# ---------------------------------------------------------------------------
+# The dashboard already exists and already talks to this API over HTTP, so it
+# needs no rewrite to be hosted — only somewhere to run. Mounting it into this
+# app makes the whole demo one container behind one URL: no second service to
+# deploy, no CORS, no cross-origin URL to keep in sync, and nothing extra that
+# can expire. GATEWAY_URL already defaults to localhost:8000, which is correct
+# once the two share a process.
+#
+# Router inference runs in an executor (deployment/router.py), so the UI's
+# loopback calls never contend with the event loop that serves them.
+if os.getenv("MOUNT_UI", "1") == "1":
+    try:
+        import gradio as gr
+        from fastapi.responses import RedirectResponse
+
+        from gradio_app.app import build_app as build_ui
+
+        app = gr.mount_gradio_app(app, build_ui(), path="/ui")
+
+        @app.get("/", include_in_schema=False)
+        async def _root() -> RedirectResponse:
+            return RedirectResponse(url="/ui")
+
+        # Gradio emits its CSS preload hints root-absolute (/assets/...) even
+        # when mounted on a subpath, so each page load logged a 404 for a file
+        # that also loads correctly from /ui/assets/. Harmless to rendering,
+        # but a console error on every visit is not something to ship.
+        @app.get("/assets/{path:path}", include_in_schema=False)
+        async def _assets(path: str) -> RedirectResponse:
+            return RedirectResponse(url=f"/ui/assets/{path}")
+
+        log.info("ui_mounted", path="/ui")
+    except Exception as e:
+        # API-only is a valid way to run this; a missing UI must not take the
+        # service down with it.
+        log.warning("ui_mount_failed", error=str(e), fallback="api_only")

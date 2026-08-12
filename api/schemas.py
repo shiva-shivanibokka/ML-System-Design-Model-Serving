@@ -102,7 +102,21 @@ class HealthResponse(BaseModel):
     )
     redis_available: bool = Field(
         ...,
-        description="True if Redis cache is reachable.",
+        description=(
+            "True only if Redis itself is reachable. The in-process fallback "
+            "does not set this — see cache_backend for what is actually serving."
+        ),
+    )
+    cache_backend: str = Field(
+        default="none",
+        description="Which cache answered: redis | in_process | none.",
+    )
+    models_stage: str = Field(
+        default="ready",
+        description=(
+            "Model loader stage. /health is liveness only and stays 200 while "
+            "models load, so this says whether inference is available yet."
+        ),
     )
     deployment_state: str = Field(
         ...,
@@ -132,6 +146,21 @@ class ReadinessResponse(BaseModel):
         default_factory=dict,
         description="Per-model warm-up results (first vs last inference latency).",
     )
+    stage: str = Field(
+        default="ready",
+        description=(
+            "Where the loader is: not_started | loading_v1 | warming_v1 | "
+            "loading_v2 | warming_v2 | ready | failed."
+        ),
+    )
+    load_elapsed_seconds: float = Field(
+        default=0.0,
+        description="Seconds since the loader started. Lets a caller show progress.",
+    )
+    load_error: Optional[str] = Field(
+        default=None,
+        description="Exception from the loader, if stage is 'failed'.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +181,9 @@ class DeploymentStatusResponse(BaseModel):
     total_requests: int
     time_in_state_seconds: float
     auto_progression_enabled: bool
+    # "disk" when state survives a restart, "ephemeral" when it lives only for
+    # the life of this instance. Stated rather than assumed.
+    state_durability: str = "disk"
     rollback_thresholds: dict
     circuit_breaker: dict
 
@@ -221,3 +253,4 @@ class CacheStatsResponse(BaseModel):
     errors: int
     hit_rate: float
     available: bool
+    backend: str = "none"  # "redis" | "in_process" | "none"

@@ -109,6 +109,10 @@ services:
       POSTGRES_PASSWORD: postgres
       GATEWAY_URL: http://gateway:8000
       PYTHONPATH: /app
+      # Compose runs the control panel as its own service on 7860, so the
+      # gateway does not also mount a copy. The single-container deployment
+      # leaves this at its default of 1.
+      MOUNT_UI: "0"
     volumes:
       - hf-cache:/app/.cache/huggingface
       - deployment-state:/app/data

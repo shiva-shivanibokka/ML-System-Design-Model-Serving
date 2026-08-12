@@ -58,14 +58,97 @@ def api_post(path: str, body: Optional[dict] = None) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Cold start
+# ---------------------------------------------------------------------------
+# The hosted instance scales to zero, so the first visitor after an idle period
+# arrives while the two models are still loading. The API is up and every
+# monitoring tab answers immediately; only inference has to wait.
+#
+# Rather than returning an error the visitor has to interpret, or polling on a
+# timer (which would hold an instance awake and quietly burn the free tier),
+# the predict handler blocks on /ready and reports the stage it is waiting on.
+# One click, a live progress line, then the real answer.
+
+STAGE_TEXT = {
+    "not_started": "starting up",
+    "loading_v1": "loading model v1 (DistilBERT, FP32)",
+    "warming_v1": "warming up v1 — running JIT passes",
+    "loading_v2": "loading model v2 and applying INT8 quantization",
+    "warming_v2": "warming up v2 — running JIT passes",
+}
+
+
+def wait_until_ready(progress=None, timeout: float = 180.0) -> Optional[str]:
+    """
+    Block until the API reports ready. Returns None on success, else a message.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            r = httpx.get(f"{API_BASE}/ready", timeout=5.0)
+            body = r.json()
+        except Exception as e:
+            return f"Cannot reach the API: {e}"
+
+        if r.status_code == 200:
+            return None
+        if body.get("stage") == "failed":
+            return f"Model load failed: {body.get('load_error', 'unknown error')}"
+
+        if progress is not None:
+            elapsed = body.get("load_elapsed_seconds", 0)
+            stage = STAGE_TEXT.get(body.get("stage", ""), "starting up")
+            progress(0, desc=f"Cold start — {stage} ({elapsed:.0f}s)")
+        time.sleep(2.0)
+
+    return f"Models still loading after {timeout:.0f}s. Try again shortly."
+
+
+def readiness_banner() -> str:
+    """One-shot status line shown when the page loads. Deliberately not timed."""
+    body = api_get("/ready") or {}
+    health = api_get("/health") or {}
+    cache_backend = health.get("cache_backend", "unknown")
+    durability = (api_get("/deployment/status") or {}).get("state_durability", "disk")
+
+    note = (
+        "Deployment state is held in memory and resets when the instance is "
+        "recycled after a period of no traffic — this is a demo control plane, "
+        "not a production one."
+        if durability == "ephemeral"
+        else "Deployment state persists to disk across restarts."
+    )
+
+    if body.get("ready"):
+        return (
+            f"<div style='padding:10px 14px;border-radius:8px;background:#e8f5e9;"
+            f"border:1px solid #a5d6a7'><b>Models ready.</b> "
+            f"Cache backend: <code>{cache_backend}</code>. {note}</div>"
+        )
+
+    stage = STAGE_TEXT.get(body.get("stage", ""), "starting up")
+    return (
+        f"<div style='padding:10px 14px;border-radius:8px;background:#fff8e1;"
+        f"border:1px solid #ffe082'><b>Cold start in progress</b> — {stage}. "
+        f"Monitoring tabs work now; the first prediction will wait for warm-up "
+        f"and then answer. {note}</div>"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tab 1: Predict
 # ---------------------------------------------------------------------------
 
 
-def run_prediction(text: str) -> tuple[str, str, str, str, str]:
+def run_prediction(text: str, progress=gr.Progress()) -> tuple[str, str, str, str, str]:
     """Call /predict and return formatted result fields."""
     if not text.strip():
         return "—", "—", "—", "—", "—"
+
+    # Waits out a cold start instead of surfacing a 503 the visitor can't act on.
+    problem = wait_until_ready(progress)
+    if problem:
+        return f"Error: {problem}", "—", "—", "—", "—"
 
     result = api_post("/predict", {"text": text})
     if "error" in result:
@@ -698,6 +781,12 @@ def build_app() -> gr.Blocks:
             "**Production deployment lifecycle management** — shadow mode, "
             "canary rollout, circuit breaker, drift detection, and audit trail."
         )
+
+        # Rendered once on page load. No `every=` timer: an open tab that polls
+        # forever would keep a scale-to-zero instance awake for as long as the
+        # tab is open, which is exactly the cost this deployment avoids.
+        status_banner = gr.HTML()
+        demo.load(fn=readiness_banner, inputs=None, outputs=status_banner)
 
         with gr.Tabs():
             with gr.Tab("Predict"):

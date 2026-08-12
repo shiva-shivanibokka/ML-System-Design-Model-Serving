@@ -46,6 +46,17 @@ from configs.settings import settings
 
 log = structlog.get_logger(__name__)
 
+# On a scale-to-zero managed runtime the container filesystem is scratch space:
+# it is wiped when the instance is recycled, and a second instance would get its
+# own copy. Writing state there does not make it durable, it makes it
+# *inconsistent* — the file would claim canary_50 on one instance and shadow on
+# the next, with nothing reporting the discrepancy.
+#
+# So the hosted deployment declares the truth instead of faking it: state lives
+# in memory for the life of the instance, and /deployment/status says so. Local
+# and docker-compose runs leave this unset and keep the JSON + JSONL files.
+EPHEMERAL_STATE = os.getenv("EPHEMERAL_STATE", "0") == "1"
+
 
 # ---------------------------------------------------------------------------
 # State enum
@@ -145,12 +156,13 @@ class DeploymentStateMachine:
         self._stop_auto: threading.Event = threading.Event()
 
         # Ensure persistence dirs exist
-        Path(settings.deployment.state_persistence_path).parent.mkdir(
-            parents=True, exist_ok=True
-        )
-        Path(settings.deployment.audit_log_path).parent.mkdir(
-            parents=True, exist_ok=True
-        )
+        if not EPHEMERAL_STATE:
+            Path(settings.deployment.state_persistence_path).parent.mkdir(
+                parents=True, exist_ok=True
+            )
+            Path(settings.deployment.audit_log_path).parent.mkdir(
+                parents=True, exist_ok=True
+            )
 
     # -----------------------------------------------------------------------
     # Startup / shutdown
@@ -159,7 +171,13 @@ class DeploymentStateMachine:
     def load_persisted_state(self) -> None:
         """Load state from disk on startup (survives container restart)."""
         path = Path(settings.deployment.state_persistence_path)
-        if path.exists():
+        if EPHEMERAL_STATE:
+            log.info(
+                "ephemeral_state_mode",
+                using=self._state.value,
+                note="state resets when this instance is recycled",
+            )
+        elif path.exists():
             try:
                 data = json.loads(path.read_text())
                 loaded_state = DeploymentState(
@@ -242,6 +260,7 @@ class DeploymentStateMachine:
                 "total_requests": self._total_requests,
                 "time_in_state_seconds": round(time_in_state, 1),
                 "auto_progression_enabled": settings.deployment.auto_progression.enabled,
+                "state_durability": "ephemeral" if EPHEMERAL_STATE else "disk",
                 "rollback_thresholds": {
                     "error_rate": settings.deployment.rollback.error_rate_threshold,
                     "latency_multiplier": settings.deployment.rollback.latency_p99_multiplier,
@@ -391,6 +410,51 @@ class DeploymentStateMachine:
     # Internal helpers
     # -----------------------------------------------------------------------
 
+    def _record_audit(
+        self,
+        from_state: DeploymentState,
+        to_state: DeploymentState,
+        trigger: str,
+        note: str = "",
+    ) -> None:
+        """
+        Append an audit entry without changing state.
+
+        Used for markers that belong in the trail but are not transitions — the
+        "startup" entry that records which state the process booted into. It is
+        deliberately not _transition(): that one moves the machine, resets the
+        stage timer and increments the Prometheus transition counter, none of
+        which is true of simply starting up.
+
+        Takes the lock itself; callers must not hold it.
+        """
+        with self._lock:
+            entry = AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                from_state=from_state.value,
+                to_state=to_state.value,
+                trigger=trigger,
+                v2_error_rate_at_event=(
+                    round(self._v2_errors / self._v2_requests, 4)
+                    if self._v2_requests > 0
+                    else 0.0
+                ),
+                v2_p99_latency_ms=round(self._percentile(self._v2_latencies, 99), 1),
+                v1_p99_latency_ms=round(self._percentile(self._v1_latencies, 99), 1),
+                requests_seen=self._total_requests,
+                note=note,
+            )
+            self._audit_log.append(entry)
+            self._append_audit_file(entry)
+
+        log.info(
+            "deployment_audit",
+            from_state=from_state.value,
+            to_state=to_state.value,
+            trigger=trigger,
+            note=note,
+        )
+
     def _transition(
         self,
         to_state: DeploymentState,
@@ -452,6 +516,8 @@ class DeploymentStateMachine:
 
     def _persist_state(self) -> None:
         """Write current state to JSON file. Called under lock."""
+        if EPHEMERAL_STATE:
+            return
         try:
             path = Path(settings.deployment.state_persistence_path)
             path.write_text(
@@ -468,6 +534,10 @@ class DeploymentStateMachine:
 
     def _append_audit_file(self, entry: AuditEntry) -> None:
         """Append audit entry to JSONL file. Called under lock."""
+        # The in-memory audit log (GET /deployment/audit) is unaffected — only
+        # the on-disk copy is skipped.
+        if EPHEMERAL_STATE:
+            return
         try:
             path = Path(settings.deployment.audit_log_path)
             with open(path, "a") as f:

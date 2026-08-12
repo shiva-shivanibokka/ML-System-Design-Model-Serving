@@ -1,0 +1,54 @@
+# =============================================================================
+# ML System Design: Model Serving — Serving requirements (container image)
+# =============================================================================
+# The subset the hosted service actually runs. requirements.txt stays the full
+# local/docker-compose set; this one exists because two of the packages there
+# have no place in a scale-to-zero image:
+#
+#   evidently  — ~400MB of transitive dependencies (pandas, scikit-learn, nltk)
+#                for a drift report that monitoring/drift.py already computes
+#                without it. It falls back to a scipy Jensen-Shannon divergence
+#                and reports `method: "jensen_shannon"`, so which path ran is
+#                visible on /monitoring/drift rather than assumed.
+#   locust     — a load-testing client. Nothing serves traffic with it, and
+#                docker-compose runs it from the upstream locustio image anyway.
+#
+# sqlalchemy and psycopg2 stay: they are ~13MB together and docker-compose runs
+# a real Postgres for the audit sink. Cloud Run has no Postgres and api/main.py
+# already degrades to the in-memory audit log there.
+#
+# torch is NOT listed here. The Dockerfile installs it from PyTorch's CPU index
+# first, because `pip install torch` on Linux pulls the CUDA build and roughly
+# 2.5GB of nvidia-* wheels for a service that runs `device=-1`.
+
+# ── Core API ──────────────────────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+httpx==0.27.0
+
+# ── ML Models ────────────────────────────────────────────────────────────────
+transformers==4.41.1
+
+# ── Monitoring ───────────────────────────────────────────────────────────────
+prometheus-client==0.20.0
+structlog==24.1.0
+
+# ── Drift detection (scipy path) ─────────────────────────────────────────────
+scipy==1.13.0
+numpy==1.26.4
+
+# ── Cache ─────────────────────────────────────────────────────────────────────
+# Tried first; falls back to the in-process store when no Redis is reachable.
+redis==5.0.4
+
+# ── Database (audit log) ──────────────────────────────────────────────────────
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+
+# ── UI ───────────────────────────────────────────────────────────────────────
+gradio==4.36.1
+plotly==5.22.0
+
+# ── Config ───────────────────────────────────────────────────────────────────
+pyyaml==6.0.1

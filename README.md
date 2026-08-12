@@ -6,6 +6,30 @@ A production-grade model deployment system built around the question every ML en
 
 This project implements the full answer: shadow mode validation, canary progressive delivery, circuit breaker failover, Evidently AI drift detection, disagreement rate monitoring, and a complete audit trail — all wired into a real FastAPI serving layer with Redis, Prometheus, Grafana, and Docker.
 
+**Live demo: [model-serving on Cloud Run](https://model-serving-548930096299.us-central1.run.app)** — control panel at `/ui`, API docs at `/docs`.
+
+---
+
+## Running it hosted
+
+The full stack is six containers. The hosted demo is one, and the difference is
+deliberate — see [Hosted vs. local](#hosted-vs-local) for what changes and why.
+
+Two things about the hosted instance are worth knowing before you click:
+
+**It scales to zero, so the first request is a cold start.** Both models load
+and warm up on a background thread while the API is already answering, so the
+page and every monitoring tab come up immediately and a banner reports which
+stage the loader is on. The first prediction waits for warm-up (roughly 20-40s
+from cold) and then answers; everything after that is single-digit-millisecond
+cached or ~10-30ms warm.
+
+**Deployment state is in memory and resets when the instance is recycled.**
+`GET /deployment/status` says so directly — `"state_durability": "ephemeral"`.
+If you promote to canary_25 and come back an hour later, it will read `shadow`
+again. This is a demo control plane; writing state to a container filesystem
+that gets wiped would not have made it durable, only quietly inconsistent.
+
 ---
 
 ## Architecture
@@ -266,6 +290,55 @@ Every response includes a `trace_id`. Search the structlog JSON logs for that tr
 
 **"What's the difference between this and what RecSys does with Thompson Sampling?"**
 Thompson Sampling in RecSys optimizes which model to use based on click-through rate — it's online learning. Shadow/canary is about safely deploying a new version — deployment risk management. Completely different concern.
+
+---
+
+## Hosted vs. local
+
+`docker-compose up` runs the architecture as designed: six containers, real
+Redis, real Postgres, Prometheus scraping, Grafana dashboards. The hosted demo
+runs one container with no attached services, which changes four things. All
+four are reported by the API rather than assumed, so you can tell from outside
+which mode you are looking at.
+
+| | docker-compose | Cloud Run |
+|---|---|---|
+| **Cache** | Redis | In-process dict with the same TTL. `GET /health` reports `cache_backend`, and `redis_available` stays `false` — the fallback keeps the feature working but is never described as Redis. |
+| **Deployment state** | JSON + JSONL on a volume | In memory. `state_durability: "ephemeral"` on `/deployment/status`. The in-memory audit log at `/deployment/audit` is unaffected. |
+| **Drift detection** | Evidently | scipy Jensen-Shannon divergence. `/monitoring/drift` reports `method`, so which path ran is visible. Evidently pulls ~400MB of transitive dependencies for a number `monitoring/drift.py` already computes without it. |
+| **Audit sink** | Postgres | In-memory only. |
+
+Two smaller deployment details are load-bearing:
+
+**One instance, one worker.** The state machine, circuit breaker, disagreement
+window and cache all live in process. A second worker or a second instance
+would give each its own copy — two control planes behind one URL, disagreeing
+with each other and with nothing reporting the split. `--max-instances=1` and
+`--workers 1` are what make the single-container story honest rather than
+merely convenient.
+
+**Empty means absent, not broken.** `REDIS_HOST=""` and `POSTGRES_HOST=""` tell
+the service those backends do not exist here, so it skips the connect instead
+of spending cold-start seconds resolving hostnames that were never going to
+answer. Leaving the compose defaults in place cost ~10s on every single cold
+start — most of the startup budget, spent learning something already known.
+
+### Deploying it
+
+```bash
+gcloud run deploy model-serving \
+  --source . --region us-central1 --allow-unauthenticated \
+  --port 8000 --memory 4Gi --cpu 2 \
+  --min-instances 0 --max-instances 1 --timeout 300 --cpu-boost \
+  --set-env-vars "^@^EPHEMERAL_STATE=1@MOUNT_UI=1@REDIS_HOST=@POSTGRES_HOST="
+```
+
+The image installs torch from PyTorch's CPU index and bakes the DistilBERT
+weights in at build time. Both matter: `pip install torch` on Linux resolves to
+the CUDA build and drags in ~2.5GB of `nvidia-*` wheels for a service that runs
+`device=-1`, and downloading weights at first request would move ~268MB onto
+the cold-start path. `HF_HUB_OFFLINE=1` then makes a missing layer fail loudly
+at startup rather than silently re-downloading in production.
 
 ---
 

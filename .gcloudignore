@@ -1,0 +1,12 @@
+# Files not uploaded to Cloud Build. Without this file gcloud synthesises one
+# from .gitignore, which would still ship local state and caches.
+.git
+.gitignore
+.venv/
+venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+data/
+.env
+docs/

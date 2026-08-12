@@ -40,29 +40,83 @@ from configs.settings import settings
 log = structlog.get_logger(__name__)
 
 
+class _InProcessBackend:
+    """
+    Dict-backed stand-in that speaks the four Redis calls this cache uses.
+
+    The managed deployment runs a single instance with no Redis reachable, and
+    a cache that is switched off is a feature the demo can no longer show. One
+    process means one cache, so a dict is not an approximation of Redis here —
+    it is the same thing without the network hop or the hosted dependency.
+
+    ponytail: no size bound; entries expire by TTL and the process is
+    short-lived. Add an LRU eviction if it ever holds a long-running instance.
+    """
+
+    # Bound here because setex's keyword argument is also called `time`, to
+    # match redis-py's signature exactly and keep the call sites unchanged.
+    _now = staticmethod(time.time)
+
+    def __init__(self) -> None:
+        self._store: dict[str, tuple[float, str]] = {}
+
+    def get(self, key: str) -> Optional[str]:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if self._now() >= expires_at:
+            self._store.pop(key, None)
+            return None
+        return value
+
+    def setex(self, name: str, time: int, value: str) -> None:  # noqa: A002
+        self._store[name] = (self._now() + time, value)
+
+    def keys(self, pattern: str) -> list[str]:
+        prefix = pattern.rstrip("*")
+        return [k for k in list(self._store) if k.startswith(prefix)]
+
+    def delete(self, *keys: str) -> int:
+        return sum(self._store.pop(k, None) is not None for k in keys)
+
+
 class PredictionCache:
     """
-    Redis-backed prediction cache with graceful degradation.
+    Prediction cache with graceful degradation.
 
-    If Redis is unavailable (connection refused, timeout), the cache
-    silently falls through to model inference. The API never fails
-    because of a cache outage.
+    Prefers Redis. If Redis is unreachable it falls back to an in-process
+    store rather than switching the cache off, and reports which backend is
+    live so the difference is never silent.
     """
 
     def __init__(self) -> None:
         self._client: Optional[object] = None
         self._available: bool = False
+        self._backend: str = "none"
         self._hits: int = 0
         self._misses: int = 0
         self._errors: int = 0
 
     def connect(self) -> bool:
         """
-        Attempt to connect to Redis. Returns True if successful.
-        Called once during FastAPI lifespan startup.
+        Attempt to connect to Redis, falling back to the in-process backend.
+
+        Returns True if Redis specifically is live. The cache is usable either
+        way — check `backend` to find out which one answered.
         """
         if not REDIS_AVAILABLE:
-            log.warning("redis_package_not_installed", fallback="cache_disabled")
+            log.warning("redis_package_not_installed", fallback="in_process_cache")
+            self._use_in_process()
+            return False
+
+        # An empty REDIS_HOST means "there is no Redis here", which is not the
+        # same as "Redis is down". Without this the connect attempt spends
+        # several seconds resolving a hostname that was never going to exist —
+        # paid on every cold start, to learn something already known.
+        if not settings.cache.host:
+            log.info("redis_not_configured", fallback="in_process_cache")
+            self._use_in_process()
             return False
 
         try:
@@ -76,6 +130,7 @@ class PredictionCache:
             )
             self._client.ping()
             self._available = True
+            self._backend = "redis"
             log.info(
                 "cache_connected",
                 host=settings.cache.host,
@@ -83,9 +138,15 @@ class PredictionCache:
             )
             return True
         except Exception as e:
-            log.warning("cache_unavailable", error=str(e), fallback="inference_only")
-            self._available = False
+            log.warning("redis_unavailable", error=str(e), fallback="in_process_cache")
+            self._use_in_process()
             return False
+
+    def _use_in_process(self) -> None:
+        self._client = _InProcessBackend()
+        self._available = True
+        self._backend = "in_process"
+        log.info("cache_connected", backend="in_process", ttl=settings.cache.ttl_seconds)
 
     def _make_key(self, text: str, model_version: str) -> str:
         """
@@ -151,6 +212,7 @@ class PredictionCache:
             "errors": self._errors,
             "hit_rate": round(hit_rate, 4),
             "available": self._available,
+            "backend": self._backend,
         }
 
     def flush(self) -> int:
@@ -173,3 +235,8 @@ class PredictionCache:
     @property
     def is_available(self) -> bool:
         return self._available
+
+    @property
+    def backend(self) -> str:
+        """"redis" | "in_process" | "none" — which store is answering."""
+        return self._backend

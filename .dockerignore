@@ -1,0 +1,22 @@
+# The image is pulled on every cold start, so anything copied in that the
+# service does not run is latency paid on every scale-from-zero.
+.git
+.github
+.gitignore
+docs/
+README.md
+tests/
+monitoring/grafana/
+monitoring/prometheus/
+docker-compose.yml
+
+# Local state — must never be baked in. A stale deployment_state.json in the
+# image would make every new instance boot into whatever stage the last local
+# run happened to leave behind.
+data/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.env
