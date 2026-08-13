@@ -4,35 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Model Serving — Shadow Deployment Console</title>
-<meta name="description" content="Control panel for a shadow-deployment model serving system: canary rollout, v1/v2 disagreement monitoring, drift detection and circuit breaking.">
+<meta name="description" content="Live control panel for a shadow-deployment model serving system: canary rollout, v1 vs v2 comparison, drift detection and circuit breaking.">
 <link rel="stylesheet" href="styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23080705'/><path d='M2 10 L5 10 L6 5 L8 13 L10 8 L14 8' stroke='%23F0A22E' fill='none' stroke-width='1.4'/></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%2308090F'/><path d='M2 10 L5 10 L6 5 L8 13 L10 8 L14 8' stroke='%2300E5C7' fill='none' stroke-width='1.5'/></svg>">
 </head>
 <body>
 
-<!-- ══════════════ boot / cold-start overlay ══════════════ -->
+<!-- ══════════════ cold-start overlay ══════════════ -->
 <div class="boot" id="boot">
   <div class="boot-inner">
-    <div class="title">Model Serving · Power-on Self Test</div>
+    <div class="title">Starting the demo</div>
     <div class="frame">
       <svg viewBox="0 0 600 150" preserveAspectRatio="none" aria-hidden="true">
-        <g stroke="#241D12" stroke-width="1">
+        <defs>
+          <linearGradient id="bootLine" x1="0" x2="1" y1="0" y2="0">
+            <stop offset="0%" stop-color="#00E5C7"/><stop offset="100%" stop-color="#7C5CFF"/>
+          </linearGradient>
+        </defs>
+        <g stroke="#1D2130" stroke-width="1">
           <line x1="0" y1="37" x2="600" y2="37"/><line x1="0" y1="75" x2="600" y2="75"/>
           <line x1="0" y1="112" x2="600" y2="112"/>
           <line x1="150" y1="0" x2="150" y2="150"/><line x1="300" y1="0" x2="300" y2="150"/>
           <line x1="450" y1="0" x2="450" y2="150"/>
         </g>
-        <path class="sweep" fill="none" stroke="#F0A22E" stroke-width="1.8"
-              d="M0,75 L60,75 L80,42 L100,108 L120,75 L200,75 L220,54 L240,96 L260,75 L360,75
-                 L380,38 L400,112 L420,75 L500,75 L520,60 L540,90 L560,75 L600,75"/>
+        <path class="sweep" fill="none" stroke="url(#bootLine)" stroke-width="2.4"
+              d="M0,75 L60,75 L80,40 L100,110 L120,75 L200,75 L220,52 L240,98 L260,75 L360,75
+                 L380,36 L400,114 L420,75 L500,75 L520,58 L540,92 L560,75 L600,75"/>
       </svg>
     </div>
-    <div class="stage-text" id="bootStage">Contacting service…</div>
+    <div class="stage-text" id="bootStage">Waking the server…</div>
     <div class="stage-sub" id="bootSub">
-      This service scales to zero, so the first request of the day wakes it up.
-      Two transformers load and warm up before it will serve traffic — about 70 seconds.
+      This demo shuts itself down when nobody is using it, so it costs nothing to run.
+      Starting it back up takes about a minute — it has to load two AI models into memory.
+      Nothing is broken; just give it a moment.
     </div>
-    <div class="steps" id="bootSteps">
+    <div class="steps-bar" id="bootSteps">
       <i data-stage="loading_v1"></i><i data-stage="warming_v1"></i>
       <i data-stage="loading_v2"></i><i data-stage="warming_v2"></i><i data-stage="ready"></i>
     </div>
@@ -53,18 +59,74 @@
     </span>
   </div>
 
-  <!-- ══════════════ stage lane (always visible) ══════════════ -->
+  <!-- ══════════════ how to use ══════════════ -->
+  <section class="howto">
+    <h2>How to use this demo</h2>
+    <p class="lede">
+      This is a control panel for <b>safely replacing one AI model with another</b> while it is
+      serving real people. The old model is <b>v1</b>. The new one is <b>v2</b> — the same model
+      compressed to run faster. The question this whole system exists to answer is: <b>can we trust
+      v2 enough to let it start answering real requests?</b> You are the person deciding.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <span class="n">Start here</span>
+        <h3>Type a sentence</h3>
+        <p>Go to <b>Predict</b> and enter any sentence with an opinion in it — a product review
+          works well. Both models read it, but only one answer comes back to you.</p>
+      </div>
+      <div class="step">
+        <span class="n">Then</span>
+        <h3>See if they agree</h3>
+        <p><b>Comparison</b> shows how far apart the two models were on everything you have sent.
+          They should be almost identical. If they are not, v2 is not safe to ship.</p>
+      </div>
+      <div class="step">
+        <span class="n">Then</span>
+        <h3>Give v2 some traffic</h3>
+        <p>On <b>Rollout</b>, press Promote. That hands v2 5% of requests, then 25%, 50%, and
+          finally all of them — one careful step at a time.</p>
+      </div>
+      <div class="step">
+        <span class="n">Any time</span>
+        <h3>Pull it back</h3>
+        <p>Press Roll back and every request instantly returns to the old model. <b>Audit</b>
+          records what the numbers looked like at the moment you decided.</p>
+      </div>
+    </div>
+
+    <details>
+      <summary>Why do it this way?</summary>
+      <p>
+        Swapping a model all at once is how outages happen: the new one behaves differently on
+        inputs nobody tested, and by the time anyone notices, every user has been affected. The
+        alternative is to let the new model answer <b>silently</b> at first — it sees every request
+        and its answers are recorded, but nobody receives them. Once its answers look right, it
+        gets a small slice of real traffic, and the slice grows only while the numbers stay clean.
+      </p>
+      <p>
+        Everything on this page updates from the running service — nothing here is pre-recorded.
+        The panel refreshes when you switch tabs or press Refresh rather than polling constantly,
+        because a page that polls forever would keep the server awake and defeat the point of
+        letting it sleep.
+      </p>
+    </details>
+  </section>
+
+  <!-- ══════════════ stage lane ══════════════ -->
   <div class="lane-wrap">
     <div class="lane-head">
       <span class="k">Rollout position</span>
       <span class="pos" id="lanePos">—</span>
+      <button class="q" data-tip="How much real traffic the new model is currently answering. It starts at nothing and moves up one step at a time — 5%, 25%, 50%, then everything.">?</button>
     </div>
     <div class="stage-lane" id="stageLane">
-      <div class="step" data-state="shadow">Shadow</div>
-      <div class="step" data-state="canary_5">Canary 5</div>
-      <div class="step" data-state="canary_25">Canary 25</div>
-      <div class="step" data-state="canary_50">Canary 50</div>
-      <div class="step" data-state="full">Full</div>
+      <div class="step-cell" data-state="shadow">Shadow</div>
+      <div class="step-cell" data-state="canary_5">Canary 5</div>
+      <div class="step-cell" data-state="canary_25">Canary 25</div>
+      <div class="step-cell" data-state="canary_50">Canary 50</div>
+      <div class="step-cell" data-state="full">Full</div>
     </div>
   </div>
 
@@ -72,7 +134,7 @@
   <nav class="tabs" id="tabs" role="tablist">
     <button class="on" data-view="predict" role="tab">Predict</button>
     <button data-view="rollout" role="tab">Rollout</button>
-    <button data-view="disagreement" role="tab">Disagreement</button>
+    <button data-view="comparison" role="tab">Comparison</button>
     <button data-view="drift" role="tab">Drift</button>
     <button data-view="cache" role="tab">Cache</button>
     <button data-view="audit" role="tab">Audit</button>
@@ -80,35 +142,39 @@
 
   <!-- ══════════════ PREDICT ══════════════ -->
   <section class="view on" id="view-predict" role="tabpanel">
+    <p class="explain">
+      Type a sentence and both models read it. Which one actually answers you depends on the rollout
+      stage above — in <b>Shadow</b> the old model always answers while the new one works silently in
+      the background, and from <b>Canary 5</b> onward the new model starts answering a share of
+      requests for real. Sending the same sentence twice returns a stored answer instantly instead of
+      running the model again.
+    </p>
+
     <div class="grid-wide">
       <div class="block">
-        <h2>Classify text</h2>
-        <p class="explain">
-          The router decides which model answers. In <b>shadow</b> every request is served by v1
-          while v2 also runs and its answer is recorded but never returned. From <b>canary 5</b>
-          onward a share of requests is genuinely served by v2. Identical text is cached, so a
-          repeat of the same input returns in well under a millisecond.
-        </p>
+        <h2>Classify text
+          <button class="q" data-tip="Sentiment analysis: the model reads a sentence and decides whether the opinion in it is positive or negative, with a confidence score.">?</button>
+        </h2>
         <textarea id="predictText" rows="3" spellcheck="false">The battery died after two days and support never replied.</textarea>
         <div class="samples" id="samples">
-          <button data-t="The battery died after two days and support never replied.">negative · clear</button>
-          <button data-t="Absolutely brilliant — better than I expected for the price.">positive · clear</button>
+          <button data-t="The battery died after two days and support never replied.">clearly negative</button>
+          <button data-t="Absolutely brilliant — better than I expected for the price.">clearly positive</button>
           <button data-t="It works, I suppose, though I would not buy it again.">borderline</button>
-          <button data-t="Not bad at all, honestly.">double negative</button>
+          <button data-t="Not bad at all, honestly.">tricky wording</button>
         </div>
         <div class="keys">
           <button class="key prime" id="btnPredict">Classify</button>
-          <button class="key quiet" id="btnPredictAgain">Repeat (cache test)</button>
+          <button class="key quiet" id="btnPredictAgain">Send the same again
+          </button>
+          <button class="q" data-tip="Sends the identical sentence a second time. The answer comes back from the cache in well under a millisecond, without running the model at all.">?</button>
         </div>
         <div id="predictResult"></div>
       </div>
 
       <div class="block">
-        <h2>What just happened</h2>
-        <p class="explain">
-          Every field the API returns, unedited. <b>model_used</b> is which model actually answered;
-          <b>cache_hit</b> tells you whether inference ran at all.
-        </p>
+        <h2>Raw response
+          <button class="q tip-left" data-tip="Exactly what the API returned, unedited. model_used is which model answered; cache_hit tells you whether the model ran at all.">?</button>
+        </h2>
         <table id="predictDetail">
           <tbody><tr><td class="k">No prediction yet</td><td class="n">—</td></tr></tbody>
         </table>
@@ -119,24 +185,22 @@
   <!-- ══════════════ ROLLOUT ══════════════ -->
   <section class="view" id="view-rollout" role="tabpanel">
     <p class="explain">
-      A canary rollout gives a new model a small share of live traffic, watches it against fixed
-      thresholds, and either advances it or pulls it back. Promotion here is manual. Any breached
-      threshold triggers an automatic rollback to <b>shadow</b> and flushes the cache, so no answer
-      produced by the suspect model can be served again from memory.
+      Promoting hands the new model a bigger share of live traffic: <b>nothing → 5% → 25% → 50% →
+      everything</b>. Between steps the system watches two numbers — how often the new model errors,
+      and how slow it is compared to the old one. If either crosses its limit the system rolls itself
+      back automatically, without waiting for a human. Rolling back also clears the stored answers, so
+      nothing produced by a model you have just stopped trusting can be served again.
     </p>
 
     <div class="readouts" id="rolloutReadouts"></div>
 
-    <div class="grid-wide" style="margin-top:18px">
+    <div class="grid-wide" style="margin-top:16px">
       <div class="block">
-        <h2>Traffic split</h2>
+        <h2>Traffic split
+          <button class="q" data-tip="Which model is answering how much of the live traffic right now.">?</button>
+        </h2>
         <div class="split" id="splitBar"></div>
         <p class="split-caption" id="splitCaption">—</p>
-        <p class="explain" style="margin-top:16px">
-          Promotion is one step at a time: <b>shadow → canary 5 → 25 → 50 → full</b>. Rolling back
-          skips straight out of the progression and flushes the cache, because an answer produced by
-          a model you have just stopped trusting should not be served again from memory.
-        </p>
         <div class="keys">
           <button class="key prime" id="btnPromote">Promote</button>
           <button class="key stop" id="btnRollback">Roll back</button>
@@ -144,61 +208,65 @@
           <span class="stamp" id="durabilityStamp">—</span>
         </div>
       </div>
+
       <div class="block">
-        <h2>Circuit breaker</h2>
-        <p class="explain">
-          Trips after repeated v2 failures and sends everything to v1 until it is reset. It is the
-          floor under the rollout: even if a threshold is missed, a failing model stops being asked.
-        </p>
+        <h2>Safety cut-off
+          <button class="q tip-left" data-tip="A circuit breaker. If the new model fails several times in a row it is switched off entirely and every request goes to the old model, until someone resets it.">?</button>
+        </h2>
         <table id="breakerTable"><tbody></tbody></table>
       </div>
     </div>
 
-    <div class="block" style="margin-top:18px">
-      <h2>Measured against thresholds</h2>
+    <div class="block" style="margin-top:16px">
+      <h2>Measured against limits
+        <button class="q" data-tip="Each number next to the limit it must stay under. Watch means it is past 60% of its limit; Breach means the system rolls back on its own.">?</button>
+      </h2>
       <table id="thresholdTable">
-        <thead><tr><th>Parameter</th><th class="n">Measured</th><th class="n">Limit</th><th class="n">Status</th></tr></thead>
+        <thead><tr><th>What is measured</th><th class="n">Now</th><th class="n">Limit</th><th class="n">Status</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
   </section>
 
-  <!-- ══════════════ DISAGREEMENT ══════════════ -->
-  <section class="view" id="view-disagreement" role="tabpanel">
+  <!-- ══════════════ COMPARISON ══════════════ -->
+  <section class="view" id="view-comparison" role="tabpanel">
     <p class="explain">
-      Both models score every request even when only one answer is returned, so their outputs can be
-      compared continuously. Disagreement is the most useful early signal there is: it rises before
-      accuracy visibly drops, and it needs no labels to compute. The trace below plots the confidence
-      gap on each of the most recent disagreements — a large gap means one model was confidently
-      wrong rather than both being unsure.
+      Both models read every single sentence, even when only one of them answers you. That makes them
+      directly comparable at no risk. The number that matters is the <b>confidence gap</b>: how far
+      apart the two models were on the same sentence. A gap near zero means compressing the model
+      changed almost nothing — which is exactly the result you want, and the honest finding here.
+      A <b>disagreement</b> is the stronger signal: the two models reached opposite conclusions.
     </p>
 
-    <div class="readouts" id="disagreeReadouts"></div>
+    <div class="readouts" id="comparisonReadouts"></div>
 
-    <div class="block" style="margin-top:18px">
-      <h2>Confidence gap on recent disagreements</h2>
-      <div class="scope">
-        <span class="scope-corner tl">Ch1 confidence gap</span>
-        <span class="scope-corner tr" id="scopeWindow">—</span>
-        <span class="scope-corner bl">0.0 → 1.0</span>
-        <span class="scope-corner br">Trig: label mismatch</span>
-        <svg id="disagreeScope" viewBox="0 0 720 180" preserveAspectRatio="none" role="img"
-             aria-label="Confidence gap on recent disagreements"></svg>
+    <div class="block" style="margin-top:16px">
+      <h2>Confidence gap, one point per sentence
+        <button class="q" data-tip="Each point is one sentence both models read. Height is how far apart they were. Pink points are outright disagreements — opposite answers, not just different confidence.">?</button>
+      </h2>
+      <div class="chart">
+        <svg id="gapChart" viewBox="0 0 720 200" preserveAspectRatio="none" role="img"
+             aria-label="Confidence gap between the two models, one point per comparison"></svg>
       </div>
       <div class="legend">
-        <span><i style="background:#F0A22E"></i>confidence gap</span>
-        <span><i style="background:#7E5715"></i>mean gap, all requests</span>
-              </div>
+        <span><i style="background:#00E5C7"></i>confidence gap</span>
+        <span><i class="dot" style="background:#FF4D8D"></i>the models disagreed</span>
+        <span><i style="background:#7B8199"></i>average gap</span>
+      </div>
     </div>
 
-    <div class="grid2" style="margin-top:18px">
+    <div class="grid2" style="margin-top:16px">
       <div class="block">
-        <h2>Direction of disagreement</h2>
+        <h2>Which way disagreements went
+          <button class="q" data-tip="When the models disagree, this shows the direction — for example old model said positive, new model said negative. A one-sided pattern means the new model has a systematic bias.">?</button>
+        </h2>
         <table id="directionTable"><tbody></tbody></table>
       </div>
       <div class="block">
-        <h2>Most recent cases</h2>
-        <div class="list" id="disagreeList"></div>
+        <h2>Most recent comparisons
+          <button class="q tip-left" data-tip="The latest sentences both models scored. The text you typed is deliberately not stored or returned here.">?</button>
+        </h2>
+        <div class="list" id="comparisonList"></div>
       </div>
     </div>
   </section>
@@ -206,24 +274,27 @@
   <!-- ══════════════ DRIFT ══════════════ -->
   <section class="view" id="view-drift" role="tabpanel">
     <p class="explain">
-      Drift is the input distribution moving away from what the model was validated on. A reference
-      window is frozen at startup, and each later batch is compared against it on two
-      features: <b>input length</b> and <b>prediction confidence</b>. The score is 0 when the
-      distributions are identical and 1 when they share nothing. Evidently computes it where it is
-      installed, otherwise a Jensen-Shannon fallback does — the method used is reported below rather
-      than assumed. Nothing here looks at correctness; it only asks whether the traffic still
-      resembles what this model was measured on.
+      Drift means the sentences arriving now no longer look like the ones the model was checked
+      against. The system takes a snapshot of the first batch it sees and freezes it, then compares
+      every later batch to that snapshot on two things: <b>how long the sentences are</b> and
+      <b>how confident the model is</b>. A score of 0 means identical, 1 means nothing in common.
+      This says nothing about whether answers are right — only whether the traffic still resembles
+      what the model was measured on.
     </p>
 
     <div class="readouts" id="driftReadouts"></div>
 
-    <div class="grid-wide" style="margin-top:18px">
+    <div class="grid-wide" style="margin-top:16px">
       <div class="block">
-        <h2>Divergence per check</h2>
+        <h2>Each check so far
+          <button class="q" data-tip="One pair of bars per check: sentence length and model confidence. The bar fills as the score approaches its limit.">?</button>
+        </h2>
         <div class="meter" id="driftMeter"></div>
       </div>
       <div class="block">
-        <h2>Last check</h2>
+        <h2>Latest check
+          <button class="q tip-left" data-tip="Evidently computes this where it is installed, otherwise a Jensen-Shannon divergence fallback does. The method used is reported rather than assumed.">?</button>
+        </h2>
         <table id="driftTable"><tbody></tbody></table>
       </div>
     </div>
@@ -232,17 +303,20 @@
   <!-- ══════════════ CACHE ══════════════ -->
   <section class="view" id="view-cache" role="tabpanel">
     <p class="explain">
-      Identical input text returns a stored answer instead of running inference. This deployment runs
-      a <b>single instance</b>, and one instance means one cache — so an in-process dictionary with a
-      TTL is not an approximation of Redis here, it is the same thing without the network hop or the
-      account. The backend is reported below rather than hidden, because a fallback that quietly
-      inherits the name of the thing it replaced would hide a real outage.
+      If the same sentence arrives twice, the stored answer is returned instead of running the model
+      again — far faster and far cheaper. This demo runs as a <b>single server</b>, and one server
+      means one cache, so a plain dictionary in memory does the job that a separate cache service
+      would normally do, with no network hop and no account. The panel names whichever store actually
+      answered, because a stand-in that quietly takes the name of the real thing would hide a genuine
+      outage.
     </p>
 
     <div class="readouts" id="cacheReadouts"></div>
 
-    <div class="block" style="margin-top:18px">
-      <h2>Hit rate</h2>
+    <div class="block" style="margin-top:16px">
+      <h2>Where the lookups went
+        <button class="q" data-tip="Hits skipped the model entirely. Misses had to run it. Errors mean the cache itself failed — those never break a request, they just fall through to the model.">?</button>
+      </h2>
       <div class="meter" id="cacheMeter"></div>
     </div>
   </section>
@@ -250,26 +324,28 @@
   <!-- ══════════════ AUDIT ══════════════ -->
   <section class="view" id="view-audit" role="tabpanel">
     <p class="explain">
-      Every state transition, with the metrics as they stood at that moment. This is the record that
-      makes a rollback explainable after the fact — not just that the system pulled back, but what it
-      was seeing when it decided to.
+      Every change of stage, with the numbers as they stood at that exact moment. This is what makes
+      a rollback explainable afterwards — not just that the system pulled back, but what it was
+      seeing when it decided to.
     </p>
     <div class="block">
-      <h2>Transitions</h2>
+      <h2>Stage changes
+        <button class="q" data-tip="Newest first. Trigger says who or what caused it: a person pressing a button, or the system rolling itself back automatically.">?</button>
+      </h2>
       <div class="list" id="auditList"></div>
     </div>
   </section>
 
   <div class="hazard" id="hazard">
-    State is ephemeral — this container scales to zero, and a restart returns the machine to shadow
+    Heads up — this server sleeps when idle, and everything above resets to the beginning when it wakes
   </div>
 
   <div class="chrome" style="border-top:1px solid var(--rule);border-bottom:0">
-    <span class="model-tag">Uptime <b id="uptime">—</b></span>
-    <span class="model-tag">Refreshed <b id="lastRefresh">—</b></span>
+    <span class="model-tag">Running for <b id="uptime">—</b></span>
+    <span class="model-tag">Updated <b id="lastRefresh">—</b></span>
     <span class="lamps">
-      <button class="key quiet" id="btnRefresh" style="padding:7px 16px">Refresh</button>
-      <button class="key quiet" id="btnLive" style="padding:7px 16px">Live: off</button>
+      <button class="key quiet" id="btnRefresh" style="padding:8px 18px">Refresh</button>
+      <button class="key quiet" id="btnLive" style="padding:8px 18px">Live: off</button>
       <a class="model-tag" href="/docs" style="align-self:center">API docs →</a>
     </span>
   </div>

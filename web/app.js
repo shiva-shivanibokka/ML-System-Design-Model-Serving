@@ -15,14 +15,16 @@
 
 const STAGES = ["loading_v1", "warming_v1", "loading_v2", "warming_v2", "ready"];
 
+// Written for someone who has never deployed anything. The technical stage
+// names are still visible on /ready for anyone who wants them.
 const STAGE_TEXT = {
-  not_started: "Waking the container…",
-  loading_v1: "Loading model v1 — DistilBERT, fp32",
-  warming_v1: "Warming v1 — running JIT passes",
-  loading_v2: "Loading model v2 and applying int8 quantisation",
-  warming_v2: "Warming v2 — running JIT passes",
+  not_started: "Waking the server…",
+  loading_v1: "Loading the current model into memory",
+  warming_v1: "Warming it up — the first few runs are always slowest",
+  loading_v2: "Loading the new, compressed model",
+  warming_v2: "Warming that one up too",
   ready: "Ready",
-  failed: "Model load failed",
+  failed: "Something went wrong starting up",
 };
 
 // Mirrors PROGRESSION_ORDER in deployment/state_machine.py. rolled_back is
@@ -39,6 +41,7 @@ const LANE_LABEL = {
 const $ = (id) => document.getElementById(id);
 const pct = (x) => `${(x * 100).toFixed(2)}%`;
 const fixed = (x, n = 1) => (x === null || x === undefined ? "—" : Number(x).toFixed(n));
+const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
 
 let liveTimer = null;
 let liveStopAt = 0;
@@ -63,6 +66,14 @@ function toast(message, bad) {
   setTimeout(() => el.remove(), 3200);
 }
 
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+  );
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /* ───────────────────────── boot sequence ───────────────────────── */
 
 /*
@@ -73,10 +84,10 @@ function toast(message, bad) {
  * It polls /health rather than /ready. Both carry the load stage, but /ready
  * correctly answers 503 until warm-up finishes, and a browser logs every
  * non-2xx fetch as a console error — so polling it paints the console red for
- * seventy seconds of entirely normal startup. /health is the liveness probe:
- * 200 for as long as the process is alive, with models_stage inside. /ready
- * keeps its meaning for orchestrators, and is consulted here only to retrieve
- * the exception text when a load has actually failed.
+ * a minute of entirely normal startup. /health is the liveness probe: 200 for
+ * as long as the process is alive, with models_stage inside. /ready keeps its
+ * meaning for orchestrators, and is consulted here only to retrieve the
+ * exception text when a load has actually failed.
  */
 async function boot() {
   const started = Date.now();
@@ -85,7 +96,7 @@ async function boot() {
     try {
       h = await api("/health");
     } catch (e) {
-      $("bootStage").textContent = "Cannot reach the service";
+      $("bootStage").textContent = "Cannot reach the server";
       $("bootStage").classList.add("failed");
       $("bootSub").textContent = String(e.message || e);
       await sleep(3000);
@@ -97,7 +108,8 @@ async function boot() {
 
     const elapsed = Math.round((Date.now() - started) / 1000);
     if (stage !== "not_started" && stage !== "failed") {
-      $("bootSub").textContent = `${elapsed}s elapsed · the page becomes usable as soon as both models are warm.`;
+      $("bootSub").textContent =
+        `${elapsed} seconds so far. The page opens by itself as soon as both models are ready.`;
     }
 
     const at = STAGES.indexOf(stage);
@@ -108,7 +120,6 @@ async function boot() {
 
     if (stage === "failed") {
       $("bootStage").classList.add("failed");
-      $("bootStage").textContent = "Model load failed";
       const detail = await api("/ready").catch(() => ({}));
       $("bootSub").textContent = detail.load_error || "No error detail returned.";
       return;
@@ -125,15 +136,10 @@ async function boot() {
   }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 /* ───────────────────────── shared chrome ───────────────────────── */
 
 async function refreshChrome() {
-  const [health, status] = await Promise.all([
-    api("/health"),
-    api("/deployment/status"),
-  ]);
+  const [health, status] = await Promise.all([api("/health"), api("/deployment/status")]);
 
   $("lampReady").className = "lamp " + (health.status === "ok" ? "on" : "fault");
   $("lampStateText").textContent = status.state.replace(/_/g, " ");
@@ -154,23 +160,21 @@ async function refreshChrome() {
   // the lane says so rather than silently showing nothing.
   const at = LANE.indexOf(status.state);
   const share = Math.round((status.v2_traffic_fraction ?? 0) * 100);
-  document.querySelectorAll("#stageLane .step").forEach((el) => {
+  document.querySelectorAll("#stageLane .step-cell").forEach((el) => {
     const i = LANE.indexOf(el.dataset.state);
-    el.className = "step " + (i < at ? "done" : i === at ? "now" : "");
+    el.className = "step-cell " + (i < at ? "done" : i === at ? "now" : "");
   });
   $("stageLane").classList.toggle("aborted", status.state === "rolled_back");
   $("lanePos").textContent =
     at >= 0
-      ? `stage ${at + 1} of ${LANE.length} · ${share}% to v2`
+      ? `step ${at + 1} of ${LANE.length} — the new model is answering ${share}% of requests`
       : status.state === "rolled_back"
-        ? "rolled back — off the progression, all traffic on v1"
+        ? "rolled back — the old model is answering everything"
         : status.state;
 
   const ephemeral = status.state_durability === "ephemeral";
   $("hazard").hidden = !ephemeral;
-  $("durabilityStamp").textContent = ephemeral
-    ? "State ephemeral · resets on restart"
-    : "State persisted to disk";
+  $("durabilityStamp").textContent = ephemeral ? "Resets when the server sleeps" : "Saved to disk";
 
   return { health, status };
 }
@@ -183,11 +187,21 @@ function formatUptime(s) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+/* ───────────────────────── shared renderers ───────────────────────── */
+
+function ro(tone, k, v, d, tip) {
+  const q = tip ? ` <button class="q" data-tip="${esc(tip)}">?</button>` : "";
+  return `<div class="ro ${tone}"><div class="k">${esc(k)}${q}</div>
+    <div class="v">${v}</div><div class="d">${esc(d || "")}</div></div>`;
+}
+
+const row = (k, v) => `<tr><td class="k">${esc(k)}</td><td class="n">${esc(String(v))}</td></tr>`;
+
 /* ───────────────────────── predict ───────────────────────── */
 
 async function runPredict(text) {
   const body = text ?? $("predictText").value;
-  if (!body.trim()) return toast("Enter some text first", true);
+  if (!body.trim()) return toast("Type a sentence first", true);
 
   $("btnPredict").disabled = true;
   try {
@@ -208,18 +222,16 @@ async function runPredict(text) {
 
 function renderPrediction(r) {
   const negative = r.label.toUpperCase().startsWith("NEG");
+  const colour = negative ? "var(--alarm)" : "var(--ok)";
   $("predictResult").innerHTML = `
     <div class="result">
-      <div class="label ${negative ? "neg" : ""}">${esc(r.label)}</div>
-      <div class="score">confidence ${fixed(r.score, 4)}</div>
-      <div class="conf"><i style="width:${(r.score * 100).toFixed(1)}%;background:${
-        negative ? "var(--alarm)" : "var(--amber)"
-      }"></i></div>
+      <div class="label ${negative ? "neg" : "pos"}">${esc(r.label)}</div>
+      <div class="score">${(r.score * 100).toFixed(2)}% confident</div>
+      <div class="conf"><i style="width:${(r.score * 100).toFixed(1)}%;background:${colour}"></i></div>
       <div class="meta">
-        <span>served by <b>${esc(r.model_used)}</b></span>
-        <span>version <b>${esc(r.model_version)}</b></span>
-        <span>latency <b>${fixed(r.latency_ms, 2)} ms</b></span>
-        <span>cache <b>${r.cache_hit ? "hit" : "miss"}</b></span>
+        <span>answered by <b>${esc(r.model_used)}</b></span>
+        <span>took <b>${fixed(r.latency_ms, 2)} ms</b></span>
+        <span>${r.cache_hit ? "<b>from cache</b> — the model did not run" : "the model ran"}</span>
       </div>
     </div>`;
 
@@ -235,14 +247,6 @@ function renderPrediction(r) {
   </tbody>`;
 }
 
-const row = (k, v) => `<tr><td class="k">${esc(k)}</td><td class="n">${esc(String(v))}</td></tr>`;
-
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
-}
-
 /* ───────────────────────── rollout ───────────────────────── */
 
 async function refreshRollout() {
@@ -250,57 +254,61 @@ async function refreshRollout() {
   const t = status.rollback_thresholds || {};
   const share = Math.round((status.v2_traffic_fraction ?? 0) * 100);
   const aborted = status.state === "rolled_back";
+  const errRate = status.v2_error_rate ?? 0;
+  const errLimit = t.error_rate ?? 0.05;
 
   $("rolloutReadouts").innerHTML = `
-    ${ro("Traffic to v2", `${share}<small>%</small>`, status.state.replace(/_/g, " "), aborted ? "alarm" : "")}
-    ${ro("Requests seen", fmtInt(status.total_requests), `${fmtInt(status.v2_requests)} answered by v2`)}
-    ${ro("Time in state", formatUptime(status.time_in_state_seconds), "auto-progression " + (status.auto_progression_enabled ? "on" : "off"))}
-    ${ro("v2 error rate", pct(status.v2_error_rate ?? 0), `limit ${pct(t.error_rate ?? 0.05)}`, (status.v2_error_rate ?? 0) >= (t.error_rate ?? 0.05) ? "alarm" : "ok")}
+    ${ro("traffic", "Traffic to the new model", `${share}<small>%</small>`,
+      status.state.replace(/_/g, " "),
+      "The share of real requests the new model is answering right now.")}
+    ${ro("plain", "Requests handled", fmtInt(status.total_requests),
+      `${fmtInt(status.v2_requests)} of them by the new model`,
+      "Total requests since this stage began. The rollout will not act on fewer than 20 — a couple of bad requests is noise, not evidence.")}
+    ${ro("speed", "Time at this stage", formatUptime(status.time_in_state_seconds),
+      "auto-advance " + (status.auto_progression_enabled ? "on" : "off"),
+      "How long the new model has held this share of traffic without tripping a limit.")}
+    ${ro(errRate >= errLimit ? "alarm" : "ok", "New model failures", pct(errRate),
+      `rolls back above ${pct(errLimit)}`,
+      "How often the new model errors. Cross the limit and the system rolls itself back without waiting for a human.")}
   `;
 
   // A 5% slice is too narrow to hold "v2 — 5%", and a clipped label reads as a
   // rendering fault. Below 12% the segment carries no text and the caption
   // underneath states the split instead.
-  const seg = (cls, w, text) =>
-    `<i class="${cls}" style="width:${w}%">${w >= 12 ? text : ""}</i>`;
+  const seg = (cls, w, text) => `<i class="${cls}" style="width:${w}%">${w >= 12 ? text : ""}</i>`;
 
   $("splitBar").innerHTML = aborted
-    ? `<i class="a" style="width:100%">rolled back — v1 serving 100%</i>`
+    ? `<i class="a" style="width:100%">rolled back — old model answering everything</i>`
     : share === 0
-      ? `<i class="a" style="width:100%">v1 — 100% · v2 shadowing every request</i>`
-      : seg("a", 100 - share, `v1 — ${100 - share}%`) + seg("b", share, `v2 — ${share}%`);
+      ? `<i class="a" style="width:100%">old model — 100% · new model watching silently</i>`
+      : seg("a", 100 - share, `old — ${100 - share}%`) + seg("b", share, `new — ${share}%`);
 
   const at = LANE.indexOf(status.state);
   const next = at >= 0 && at < LANE.length - 1 ? LANE[at + 1] : null;
   $("splitCaption").textContent = aborted
-    ? "Promote returns the machine to shadow and starts the progression again."
+    ? "Promote starts the whole process again from the beginning."
     : next
-      ? `v1 ${100 - share}% · v2 ${share}% — promote advances to ${LANE_LABEL[next]}`
-      : "Fully deployed. v2 is serving every request.";
+      ? `Promote moves the new model to ${LANE_LABEL[next]}.`
+      : "Fully rolled out. The new model is answering everything.";
 
   const brk = status.circuit_breaker || {};
   const bt = brk.thresholds || {};
   $("breakerTable").innerHTML = `<tbody>
     ${row("state", brk.state ?? "—")}
-    ${row("failure count", `${brk.failure_count ?? 0} / ${bt.failure_threshold ?? "—"}`)}
+    ${row("failures in a row", `${brk.failure_count ?? 0} of ${bt.failure_threshold ?? "—"}`)}
     ${row("failure rate", pct(brk.failure_rate ?? 0))}
     ${row("calls / failures", `${fmtInt(brk.total_calls)} / ${fmtInt(brk.total_failures)}`)}
-    ${row("blocked calls", fmtInt(brk.total_blocked))}
-    ${row("reopen timeout", `${bt.timeout_seconds ?? "—"} s`)}
+    ${row("requests blocked", fmtInt(brk.total_blocked))}
+    ${row("retry after", `${bt.timeout_seconds ?? "—"} s`)}
   </tbody>`;
 
-  // v2 latency is judged relative to v1, not against a fixed ceiling: the
-  // limit is v1's own p99 times latency_multiplier.
+  // The new model's speed is judged relative to the old one, not against a
+  // fixed ceiling: the limit is v1's own p99 times latency_multiplier.
   const mult = t.latency_multiplier ?? 2.0;
   const v1p99 = status.v1_p99_latency_ms ?? 0;
   $("thresholdTable").querySelector("tbody").innerHTML = [
-    thr("v2 error rate", status.v2_error_rate ?? 0, t.error_rate ?? 0.05, "rate"),
-    thr(
-      `v2 p99 latency (≤ ${mult}× v1)`,
-      status.v2_p99_latency_ms ?? 0,
-      v1p99 * mult,
-      "ms"
-    ),
+    thr("How often the new model errors", errRate, errLimit, "rate"),
+    thr(`How slow it is (limit: ${mult}× the old model)`, status.v2_p99_latency_ms ?? 0, v1p99 * mult, "ms"),
   ].join("");
 }
 
@@ -311,7 +319,7 @@ function thr(name, measured, limit, kind) {
   if (!limit) {
     return `<tr><td>${esc(name)}</td><td class="n">${fmt(measured)}</td>
       <td class="n">—</td>
-      <td class="n"><span class="flag watch">No baseline</span></td></tr>`;
+      <td class="n"><span class="flag watch">Not measured yet</span></td></tr>`;
   }
   const ratio = measured / limit;
   const flag = ratio >= 1 ? "alarm" : ratio >= 0.6 ? "watch" : "ok";
@@ -321,21 +329,14 @@ function thr(name, measured, limit, kind) {
     <td class="n"><span class="flag ${flag}">${label}</span></td></tr>`;
 }
 
-function ro(k, v, d, cls) {
-  return `<div class="ro"><div class="k">${esc(k)}</div>
-    <div class="v ${cls || ""}">${v}</div><div class="d">${esc(d || "")}</div></div>`;
-}
-
-const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
-
 async function act(path, label) {
   try {
     const r = await api(path, { method: "POST" });
     if (r.ok === false) {
-      toast(r.reason || `${label} refused`, true);
+      toast(r.reason || `${label} not possible`, true);
     } else {
       const moved = r.from_state && r.to_state ? ` ${r.from_state} → ${r.to_state}` : "";
-      toast(`${label}${moved}${r.cache_flushed ? " · cache flushed" : ""}`);
+      toast(`${label}${moved}${r.cache_flushed ? " · cache cleared" : ""}`);
     }
     await refreshChrome();
     await refreshRollout();
@@ -344,119 +345,151 @@ async function act(path, label) {
   }
 }
 
-/* ───────────────────────── disagreement ───────────────────────── */
+/* ───────────────────────── comparison ───────────────────────── */
 
-async function refreshDisagreement() {
+async function refreshComparison() {
   const [s, recent] = await Promise.all([
     api("/monitoring/disagreement"),
-    api("/monitoring/disagreement/recent?n=20"),
+    api("/monitoring/disagreement/comparisons?n=40"),
   ]);
 
   const alerting = s.disagreement_rate >= s.alert_threshold;
-  $("disagreeReadouts").innerHTML = `
-    ${ro("Disagreement rate", pct(s.disagreement_rate), `${s.disagreements_in_window} of ${s.window_size} · alerts at ${pct(s.alert_threshold)}`, alerting ? "alarm" : "")}
-    ${ro("Comparisons", fmtInt(s.total_comparisons), "both models scored")}
-    ${ro("Mean gap, all", fixed(s.avg_confidence_gap_all, 3), "confidence difference", "plain")}
-    ${ro("Mean gap, on disagreement", fixed(s.avg_confidence_gap_on_disagreements, 3), "higher means confidently split", "plain")}
+  $("comparisonReadouts").innerHTML = `
+    ${ro("gap", "Average gap", fixed(s.avg_confidence_gap_all, 4),
+      "0 would mean identical answers",
+      "How far apart the two models are on average. Near zero means compressing the model barely changed it — the result you want.")}
+    ${ro("plain", "Sentences compared", fmtInt(s.total_comparisons),
+      "both models read every one",
+      "Both models score every request even when only one answers you, so they can be compared continuously at no risk.")}
+    ${ro(alerting ? "alarm" : "ok", "Outright disagreements", pct(s.disagreement_rate),
+      `${s.disagreements_in_window} of ${s.window_size} · alerts above ${pct(s.alert_threshold)}`,
+      "How often the two models reached opposite conclusions. This is the strong signal — it rises before accuracy visibly drops, and needs no correct answers to compute.")}
+    ${ro("speed", "Gap when they disagree", fixed(s.avg_confidence_gap_on_disagreements, 4),
+      "higher means confidently split",
+      "When they do disagree, how confident each was. A large number means one model was confidently wrong rather than both being unsure.")}
   `;
 
-  $("scopeWindow").textContent = `${s.window_size} req window`;
-
-  const cases = recent.recent_disagreements || [];
-  drawScope(cases, s);
+  const cases = recent.comparisons || [];
+  drawGapChart(cases, s.avg_confidence_gap_all ?? 0);
 
   const dir = s.direction_breakdown || {};
-  const dirRows = Object.keys(dir).length
-    ? Object.entries(dir).map(([k, v]) => row(k.replace(/_/g, " → "), fmtInt(v))).join("")
-    : `<tr><td class="k">No disagreements recorded yet</td><td class="n">—</td></tr>`;
-  $("directionTable").innerHTML = `<tbody>${dirRows}</tbody>`;
+  $("directionTable").innerHTML = `<tbody>${
+    Object.keys(dir).length
+      ? Object.entries(dir).map(([k, v]) => row(k.replace(/_to_/g, " → "), fmtInt(v))).join("")
+      : `<tr><td class="k">No disagreements yet — the models have agreed every time</td><td class="n">—</td></tr>`
+  }</tbody>`;
 
-  // The API returns the labels, scores and input length but deliberately not
-  // the input text itself, so nothing a user typed is echoed back out of the
-  // monitoring endpoint.
-  $("disagreeList").innerHTML = cases.length
+  // The API returns labels, scores and input length but deliberately not the
+  // input text, so nothing anyone typed is echoed back out of monitoring.
+  $("comparisonList").innerHTML = cases.length
     ? cases
+        .slice()
+        .reverse()
         .map(
           (c) => `<div class="item">
             <div class="top">
-              <span class="trig">v1 ${esc(c.v1_label ?? "—")} → v2 ${esc(c.v2_label ?? "—")}</span>
-              <time>gap ${fixed(c.confidence_gap, 3)}</time>
+              <span class="trig" style="color:${c.agrees ? "var(--ok)" : "var(--gap)"}">
+                ${c.agrees ? "agreed" : "disagreed"}</span>
+              <span class="arrow">${esc(c.v1_label)} vs ${esc(c.v2_label)}</span>
+              <time>gap ${fixed(c.confidence_gap, 4)}</time>
             </div>
             <div class="note">
-              v1 scored ${fixed(c.v1_score, 4)}, v2 scored ${fixed(c.v2_score, 4)}
-              on ${fmtInt(c.input_length)} characters
+              old model ${fixed(c.v1_score, 4)} · new model ${fixed(c.v2_score, 4)}
+              · ${fmtInt(c.input_length)} characters
             </div>
           </div>`
         )
         .join("")
-    : `<div class="empty">No disagreements yet. Both models score every request, so cases
-       accumulate as the service is used — try the borderline samples on the Predict tab.</div>`;
+    : `<div class="empty">Nothing compared yet. Send a sentence on the Predict tab — both models
+       read every one, so points appear here immediately.</div>`;
 }
 
-function drawScope(cases, stats) {
-  const svg = $("disagreeScope");
+/*
+ * One point per comparison. The y-axis is scaled to the data rather than fixed
+ * at 0–1: the gap is typically around 0.002, so a fixed axis would draw a flat
+ * line along the bottom and hide the very thing the chart exists to show.
+ */
+function drawGapChart(cases, meanGap) {
+  const svg = $("gapChart");
   const W = 720;
-  const H = 180;
-  const grid = [];
-  for (let y = 36; y < H; y += 36) grid.push(`<line x1="0" y1="${y}" x2="${W}" y2="${y}"/>`);
-  for (let x = 90; x < W; x += 90) grid.push(`<line x1="${x}" y1="0" x2="${x}" y2="${H}"/>`);
+  const H = 200;
+  const PAD = 14;
 
-  const yOf = (v) => H - Math.max(0, Math.min(1, v)) * (H - 16) - 8;
-
-  let trace = "";
-  let points = "";
-  if (cases.length) {
-    const step = cases.length > 1 ? W / (cases.length - 1) : W;
-    const pts = cases.map((c, i) => [i * step, yOf(c.confidence_gap ?? 0)]);
-    trace = `<path fill="none" stroke="#F0A22E" stroke-width="1.8" d="M${pts
-      .map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`)
-      .join(" L")}"/>`;
-    points = pts
-      .map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.6" fill="#F0A22E"/>`)
-      .join("");
+  if (!cases.length) {
+    svg.innerHTML = `
+      <g stroke="#1D2130" stroke-width="1">
+        <line x1="0" y1="50" x2="${W}" y2="50"/><line x1="0" y1="100" x2="${W}" y2="100"/>
+        <line x1="0" y1="150" x2="${W}" y2="150"/>
+      </g>
+      <text x="${W / 2}" y="${H / 2 - 6}" text-anchor="middle" fill="#7B8199"
+            font-family="ui-monospace, monospace" font-size="13">Nothing compared yet</text>
+      <text x="${W / 2}" y="${H / 2 + 16}" text-anchor="middle" fill="#565C73"
+            font-family="ui-monospace, monospace" font-size="11">
+        Send a sentence on the Predict tab and a point appears here</text>`;
+    return;
   }
 
-  const meanY = yOf(stats.avg_confidence_gap_all ?? 0);
+  const gaps = cases.map((c) => c.confidence_gap ?? 0);
+  const peak = Math.max(...gaps, meanGap, 1e-6);
+  const yOf = (v) => H - PAD - (v / peak) * (H - PAD * 2);
+  const step = cases.length > 1 ? W / (cases.length - 1) : W;
+  const pts = cases.map((c, i) => [i * step, yOf(c.confidence_gap ?? 0)]);
+
+  const line = pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" L");
+  const area = `M${line} L${W},${H} L0,${H} Z`;
+  const meanY = yOf(meanGap);
+
+  const dots = cases
+    .map((c, i) =>
+      c.agrees
+        ? `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="3" fill="#00E5C7"/>`
+        : `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="5" fill="#FF4D8D"/>`
+    )
+    .join("");
 
   svg.innerHTML = `
-    <g stroke="#241D12" stroke-width="1">${grid.join("")}</g>
-    <line x1="0" y1="${meanY}" x2="${W}" y2="${meanY}" stroke="#7E5715" stroke-width="1.4" stroke-dasharray="5 5"/>
-    ${trace}${points}
-    ${
-      cases.length
-        ? ""
-        : `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" fill="#7E5715"
-             font-family="ui-monospace, monospace" font-size="12" letter-spacing="2">NO SIGNAL</text>`
-    }`;
+    <defs>
+      <linearGradient id="gapFill" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0%" stop-color="#00E5C7" stop-opacity="0.34"/>
+        <stop offset="100%" stop-color="#00E5C7" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <g stroke="#1D2130" stroke-width="1">
+      <line x1="0" y1="50" x2="${W}" y2="50"/><line x1="0" y1="100" x2="${W}" y2="100"/>
+      <line x1="0" y1="150" x2="${W}" y2="150"/>
+    </g>
+    <path fill="url(#gapFill)" d="${area}"/>
+    <path fill="none" stroke="#00E5C7" stroke-width="2.2" d="M${line}"/>
+    <line x1="0" y1="${meanY.toFixed(1)}" x2="${W}" y2="${meanY.toFixed(1)}"
+          stroke="#7B8199" stroke-width="1.2" stroke-dasharray="5 5"/>
+    ${dots}
+    <text x="8" y="16" fill="#565C73" font-family="ui-monospace, monospace" font-size="10">
+      top of chart = ${peak.toFixed(4)}</text>`;
 }
 
 /* ───────────────────────── drift ───────────────────────── */
 
 async function refreshDrift() {
-  const [d, hist] = await Promise.all([
-    api("/monitoring/drift"),
-    api("/monitoring/drift/history"),
-  ]);
+  const [d, hist] = await Promise.all([api("/monitoring/drift"), api("/monitoring/drift/history")]);
 
   const last = d.last_check;
   const th = d.thresholds || {};
   const frozen = d.reference_window_frozen;
 
   $("driftReadouts").innerHTML = `
-    ${ro("Reference window", frozen ? "frozen" : "filling", `${fmtInt(d.reference_size)} records`, frozen ? "ok" : "plain")}
-    ${ro("Records seen", fmtInt(d.total_records), `${fmtInt(d.checks_run)} checks run`, "plain")}
-    ${ro(
-      "Text length drift",
+    ${ro(frozen ? "ok" : "plain", "Reference snapshot", frozen ? "frozen" : "filling",
+      `${fmtInt(d.reference_size)} sentences`,
+      "The first batch of traffic is frozen as the baseline. Everything later is compared against it.")}
+    ${ro("plain", "Sentences seen", fmtInt(d.total_records), `${fmtInt(d.checks_run)} checks run`,
+      "Checks run automatically once enough new sentences have arrived.")}
+    ${ro(last ? (last.text_length_drifted ? "alarm" : "ok") : "plain", "Sentence length",
       last ? fixed(last.text_length_drift_score, 3) : "—",
       `limit ${fixed(th.text_length ?? 0.1, 2)}`,
-      last ? (last.text_length_drifted ? "alarm" : "ok") : "plain"
-    )}
-    ${ro(
-      "Confidence drift",
+      "Are the sentences arriving now about as long as the ones in the baseline? 0 means identical, 1 means nothing in common.")}
+    ${ro(last ? (last.confidence_drifted ? "alarm" : "ok") : "plain", "Model confidence",
       last ? fixed(last.confidence_drift_score, 3) : "—",
       `limit ${fixed(th.confidence ?? 0.1, 2)}`,
-      last ? (last.confidence_drifted ? "alarm" : "ok") : "plain"
-    )}
+      "Is the model as sure of itself as it used to be? A confidence shift often shows up before accuracy visibly drops.")}
   `;
 
   const history = hist.history || [];
@@ -464,27 +497,27 @@ async function refreshDrift() {
     ? history
         .slice(-8)
         .map((h) => {
-          const bar = (label, score, limit, drifted) => {
+          const bar = (label, score, limit, drifted, tone) => {
             const w = Math.min(100, limit ? (score / limit) * 100 : 0);
             return `<div class="meter-row">
               <span class="lab">${esc(label)}</span>
-              <span class="track"><i class="${drifted ? "alarm" : "ok"}" style="width:${w.toFixed(0)}%"></i></span>
+              <span class="track"><i class="${drifted ? "alarm" : tone}" style="width:${w.toFixed(0)}%"></i></span>
               <span class="n">${fixed(score, 3)}</span>
             </div>`;
           };
           return (
-            bar(`n=${h.checked_at_request_n} len`, h.text_length_drift_score, th.text_length ?? 0.1, h.text_length_drifted) +
-            bar(`n=${h.checked_at_request_n} conf`, h.confidence_drift_score, th.confidence ?? 0.1, h.confidence_drifted)
+            bar(`#${h.checked_at_request_n} length`, h.text_length_drift_score, th.text_length ?? 0.1, h.text_length_drifted, "ok") +
+            bar(`#${h.checked_at_request_n} confidence`, h.confidence_drift_score, th.confidence ?? 0.1, h.confidence_drifted, "speed")
           );
         })
         .join("")
-    : `<div class="empty">No drift checks yet. The reference window fills and freezes first; each
-       later batch is then compared against it.</div>`;
+    : `<div class="empty">No checks yet. The baseline snapshot fills first, then each later batch
+       of sentences is compared against it automatically.</div>`;
 
   $("driftTable").innerHTML = `<tbody>
-    ${row("reference frozen", String(frozen))}
-    ${row("reference size", fmtInt(d.reference_size))}
-    ${row("total records", fmtInt(d.total_records))}
+    ${row("baseline frozen", String(frozen))}
+    ${row("baseline size", fmtInt(d.reference_size))}
+    ${row("sentences seen", fmtInt(d.total_records))}
     ${row("checks run", fmtInt(d.checks_run))}
     ${last ? row("method", last.method) : ""}
     ${last ? row("checked at request", fmtInt(last.checked_at_request_n)) : ""}
@@ -499,19 +532,24 @@ async function refreshCache() {
   const total = (c.hits || 0) + (c.misses || 0);
 
   $("cacheReadouts").innerHTML = `
-    ${ro("Backend", esc(c.backend), c.available ? "answering" : "unavailable", c.backend === "none" ? "alarm" : "")}
-    ${ro("Hit rate", pct(c.hit_rate || 0), `${fmtInt(total)} lookups`, "ok")}
-    ${ro("Hits", fmtInt(c.hits), "inference skipped", "plain")}
-    ${ro("Misses", fmtInt(c.misses), `${fmtInt(c.errors)} errors`, "plain")}
+    ${ro(c.backend === "none" ? "alarm" : "cache", "Store in use", esc(c.backend),
+      c.available ? "answering" : "unavailable",
+      "Which store actually answered. Named explicitly so a stand-in can never quietly pass for the real thing.")}
+    ${ro("ok", "Answered from cache", pct(c.hit_rate || 0), `${fmtInt(total)} lookups`,
+      "The share of requests that skipped the model entirely because the same sentence had been seen before.")}
+    ${ro("plain", "Cache hits", fmtInt(c.hits), "model did not run",
+      "Each of these returned in well under a millisecond instead of running a transformer.")}
+    ${ro("plain", "Cache misses", fmtInt(c.misses), `${fmtInt(c.errors)} errors`,
+      "New sentences the model had to actually run. Errors fall through to the model rather than failing the request.")}
   `;
 
   const hit = (c.hit_rate || 0) * 100;
   $("cacheMeter").innerHTML = `
-    <div class="meter-row"><span class="lab">Hits</span>
+    <div class="meter-row"><span class="lab">From cache</span>
       <span class="track"><i class="ok" style="width:${hit.toFixed(1)}%"></i></span>
       <span class="n">${fmtInt(c.hits)}</span></div>
-    <div class="meter-row"><span class="lab">Misses</span>
-      <span class="track"><i style="width:${(100 - hit).toFixed(1)}%"></i></span>
+    <div class="meter-row"><span class="lab">Model ran</span>
+      <span class="track"><i class="cache" style="width:${(100 - hit).toFixed(1)}%"></i></span>
       <span class="n">${fmtInt(c.misses)}</span></div>
     <div class="meter-row"><span class="lab">Errors</span>
       <span class="track"><i class="alarm" style="width:${total ? ((c.errors || 0) / total) * 100 : 0}%"></i></span>
@@ -530,19 +568,20 @@ async function refreshAudit() {
           (e) => `<div class="item">
             <div class="top">
               <time>${esc(fmtTime(e.timestamp))}</time>
-              <span class="trig">${esc(e.trigger || "—")}</span>
+              <span class="trig">${esc((e.trigger || "—").replace(/_/g, " "))}</span>
               <span class="arrow">${esc(e.from_state || "—")} → ${esc(e.to_state || "—")}</span>
             </div>
             <div class="note">
-              error rate ${pct(e.v2_error_rate_at_event ?? 0)} ·
-              v2 p99 ${fixed(e.v2_p99_latency_ms, 1)} ms ·
-              v1 p99 ${fixed(e.v1_p99_latency_ms, 1)} ms ·
+              failures ${pct(e.v2_error_rate_at_event ?? 0)} ·
+              new model ${fixed(e.v2_p99_latency_ms, 1)} ms ·
+              old model ${fixed(e.v1_p99_latency_ms, 1)} ms ·
               ${fmtInt(e.requests_seen)} requests${e.note ? ` · ${esc(e.note)}` : ""}
             </div>
           </div>`
         )
         .join("")
-    : `<div class="empty">No transitions recorded.</div>`;
+    : `<div class="empty">Nothing has changed yet. Promote or roll back on the Rollout tab and it
+       will be recorded here.</div>`;
 }
 
 function fmtTime(ts) {
@@ -556,7 +595,7 @@ function fmtTime(ts) {
 const VIEWS = {
   predict: async () => {},
   rollout: refreshRollout,
-  disagreement: refreshDisagreement,
+  comparison: refreshComparison,
   drift: refreshDrift,
   cache: refreshCache,
   audit: refreshAudit,
@@ -578,7 +617,9 @@ $("tabs").addEventListener("click", async (ev) => {
   if (!btn) return;
   current = btn.dataset.view;
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b === btn));
-  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === `view-${current}`));
+  document
+    .querySelectorAll(".view")
+    .forEach((v) => v.classList.toggle("on", v.id === `view-${current}`));
   await refreshAll();
 });
 
@@ -597,8 +638,8 @@ $("btnResetBreaker").addEventListener("click", () => act("/circuit-breaker/reset
 $("btnRefresh").addEventListener("click", refreshAll);
 
 /*
- * Live mode stops itself after two minutes. An operator watching a rollout
- * wants a few minutes of live numbers; nobody wants a forgotten tab holding a
+ * Live mode stops itself after two minutes. Someone watching a rollout wants a
+ * few minutes of live numbers; nobody wants a forgotten tab holding a
  * scale-to-zero container awake all night.
  */
 $("btnLive").addEventListener("click", () => {
@@ -614,7 +655,7 @@ $("btnLive").addEventListener("click", () => {
       clearInterval(liveTimer);
       liveTimer = null;
       $("btnLive").textContent = "Live: off";
-      toast("Live refresh stopped after 2 minutes");
+      toast("Live updates stopped after 2 minutes");
       return;
     }
     refreshAll();
