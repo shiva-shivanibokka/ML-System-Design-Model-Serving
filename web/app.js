@@ -772,9 +772,12 @@ tipEl.className = "tip";
 tipEl.hidden = true;
 document.body.appendChild(tipEl);
 
+let tipFor = null;
+
 function showTip(btn) {
   const text = btn.dataset.tip;
   if (!text) return;
+  tipFor = btn;
   tipEl.textContent = text;
   tipEl.hidden = false;
 
@@ -795,8 +798,25 @@ function showTip(btn) {
 }
 
 const hideTip = () => {
+  tipFor = null;
   tipEl.hidden = true;
 };
+
+/*
+ * Follow the anchor on scroll rather than hiding. Hiding looks tidier until you
+ * try it on a phone: tapping a ? scrolls the page a few pixels to bring the
+ * button into view, and the tooltip you just asked for vanishes before you can
+ * read it.
+ */
+let tipQueued = false;
+function repositionTip() {
+  if (!tipFor || tipEl.hidden || tipQueued) return;
+  tipQueued = true;
+  requestAnimationFrame(() => {
+    tipQueued = false;
+    if (tipFor && !tipEl.hidden) showTip(tipFor);
+  });
+}
 
 document.addEventListener("mouseover", (ev) => {
   const btn = ev.target.closest?.(".q[data-tip]");
@@ -810,13 +830,15 @@ document.addEventListener("focusin", (ev) => {
 });
 
 document.addEventListener("focusout", hideTip);
-window.addEventListener("scroll", hideTip, { passive: true });
-window.addEventListener("resize", hideTip);
+window.addEventListener("scroll", repositionTip, { passive: true });
+window.addEventListener("resize", repositionTip);
 
-// A tap on a phone fires no mouseover, and focus alone does not always follow.
+// A tap fires no mouseover. Tapping a ? opens its tooltip; tapping anywhere
+// else is how you close it again, since there is no pointer to move away.
 document.addEventListener("click", (ev) => {
   const btn = ev.target.closest?.(".q[data-tip]");
   if (btn) showTip(btn);
+  else hideTip();
 });
 
 /* ───────────────────────── wiring ───────────────────────── */
