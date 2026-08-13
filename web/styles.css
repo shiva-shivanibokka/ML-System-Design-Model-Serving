@@ -373,6 +373,11 @@ a { color: var(--traffic); }
   border-radius: 14px;
   padding: 22px 24px;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  /* Grid and flex items default to min-width:auto, so they refuse to shrink
+   * below their widest unbreakable content. The traffic-split bar labels its
+   * segments with nowrap text; on a phone that one label was making the whole
+   * card 450px wide inside a 390px viewport and scrolling the page sideways. */
+  min-width: 0;
 }
 
 .block h2 {
@@ -493,6 +498,7 @@ a { color: var(--traffic); }
   border-radius: 14px;
   padding: 19px 21px;
   position: relative;
+  min-width: 0;
 }
 
 /* Two layers per readout: a 3px cap in the metric's own hue, and a soft wash
@@ -626,15 +632,18 @@ tr:last-child td { border-bottom: 0; }
 .split { display: flex; height: 44px; border-radius: 12px; overflow: hidden; border: 1px solid var(--rule); }
 
 .split i {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  line-height: 42px;
+  text-align: center;
   font-size: 13px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   white-space: nowrap;
   min-width: 0;
   overflow: hidden;
+  /* Ellipsis rather than a hard cut, so a label too long for a narrow segment
+   * ends deliberately instead of looking like a rendering fault. */
+  text-overflow: ellipsis;
 }
 
 .split .a { background: var(--sheen), var(--raise); color: var(--dim); }
