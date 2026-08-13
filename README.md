@@ -89,7 +89,7 @@ that gets wiped would not have made it durable, only quietly inconsistent.
 | "Are canary inputs different from training?" | Evidently AI drift: Jensen-Shannon divergence on text length + confidence |
 | "Why did this request take 800ms?" | Trace IDs: X-Trace-ID flows through every component and log line |
 | "Why is v2 slow on the first request?" | Warm-up: 10 dummy inferences post-load, /ready only flips after warm-up |
-| "What happened when v2 was rolled back?" | Audit log: every transition logged with metrics to PostgreSQL + JSONL |
+| "What happened when v2 was rolled back?" | Audit log: every transition recorded with the metrics as they stood, in memory and appended to JSONL |
 
 ---
 
@@ -119,7 +119,7 @@ It's the most common real-world "v2" scenario: same model architecture, differen
 | Caching | Redis (hash-keyed, per-version, TTL=300s) |
 | Metrics | Prometheus (prometheus_client) + Grafana dashboards |
 | Structured logging | structlog (JSON, trace_id-bound) |
-| Database | PostgreSQL (audit log persistence) |
+| Audit trail | In-memory ring buffer + JSONL append (no database) |
 | Load testing | Locust (canary-aware per-version latency breakdown) |
 | Containerization | Docker + docker-compose (5 services) |
 | Control panel | Static HTML/CSS/JS, no build step, served by FastAPI at `/ui` |
@@ -295,18 +295,17 @@ Thompson Sampling in RecSys optimizes which model to use based on click-through 
 
 ## Hosted vs. local
 
-`docker-compose up` runs the architecture as designed: six containers, real
-Redis, real Postgres, Prometheus scraping, Grafana dashboards. The hosted demo
-runs one container with no attached services, which changes four things. All
-four are reported by the API rather than assumed, so you can tell from outside
-which mode you are looking at.
+`docker-compose up` runs the architecture as designed: five containers, real
+Redis, Prometheus scraping, Grafana dashboards. The hosted demo runs one
+container with no attached services, which changes three things. All three are
+reported by the API rather than assumed, so you can tell from outside which
+mode you are looking at.
 
 | | docker-compose | Cloud Run |
 |---|---|---|
 | **Cache** | Redis | In-process dict with the same TTL. `GET /health` reports `cache_backend`, and `redis_available` stays `false` — the fallback keeps the feature working but is never described as Redis. |
 | **Deployment state** | JSON + JSONL on a volume | In memory. `state_durability: "ephemeral"` on `/deployment/status`. The in-memory audit log at `/deployment/audit` is unaffected. |
 | **Drift detection** | Evidently | scipy Jensen-Shannon divergence. `/monitoring/drift` reports `method`, so which path ran is visible. Evidently pulls ~400MB of transitive dependencies for a number `monitoring/drift.py` already computes without it. |
-| **Audit sink** | Postgres | In-memory only. |
 
 Two smaller deployment details are load-bearing:
 
@@ -317,11 +316,11 @@ with each other and with nothing reporting the split. `--max-instances=1` and
 `--workers 1` are what make the single-container story honest rather than
 merely convenient.
 
-**Empty means absent, not broken.** `REDIS_HOST=""` and `POSTGRES_HOST=""` tell
-the service those backends do not exist here, so it skips the connect instead
-of spending cold-start seconds resolving hostnames that were never going to
-answer. Leaving the compose defaults in place cost ~10s on every single cold
-start — most of the startup budget, spent learning something already known.
+**Empty means absent, not broken.** `REDIS_HOST=""` tells the service there is
+no Redis here, so it skips the connect instead of spending cold-start seconds
+resolving a hostname that was never going to answer. Leaving the compose
+default in place cost seconds on every single cold start — a large share of the
+startup budget, spent learning something already known.
 
 ### Deploying it
 
@@ -330,7 +329,7 @@ gcloud run deploy model-serving \
   --source . --region us-central1 --allow-unauthenticated \
   --port 8000 --memory 4Gi --cpu 2 \
   --min-instances 0 --max-instances 1 --timeout 300 --cpu-boost \
-  --set-env-vars "^@^EPHEMERAL_STATE=1@MOUNT_UI=1@REDIS_HOST=@POSTGRES_HOST="
+  --set-env-vars "^@^EPHEMERAL_STATE=1@MOUNT_UI=1@REDIS_HOST="
 ```
 
 The image installs torch from PyTorch's CPU index and bakes the DistilBERT

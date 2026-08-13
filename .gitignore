@@ -38,3 +38,9 @@ Thumbs.db
 
 # Docker
 *.log
+
+# Internal planning notes. These are working documents — a design spec for work
+# that was only partly carried out — not documentation of what this repo does.
+# Publishing a plan that still lists intended-but-unbuilt work reads as a list
+# of gaps rather than a record of decisions. Kept locally, out of the repo.
+docs/superpowers/

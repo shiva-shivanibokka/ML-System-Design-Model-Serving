@@ -41,7 +41,10 @@ class ModelV1(BaseModel):
             device=-1,  # -1 = CPU; set to 0 for first GPU
             truncation=True,
             max_length=settings.models.v1.max_length,
-            return_all_scores=False,
+            # No return_all_scores/top_k: the default already returns the single
+            # top label as [{label, score}], which is what _run_inference
+            # unpacks. top_k=1 is NOT equivalent — it nests one level deeper
+            # ([[{...}]]) and would break the caller.
         )
         self._loaded = True
         log.info("model_loaded", version=self.version)

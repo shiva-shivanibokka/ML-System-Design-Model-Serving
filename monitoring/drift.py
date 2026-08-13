@@ -39,7 +39,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, List, Optional
 
 import numpy as np
 import structlog
@@ -48,12 +48,14 @@ from configs.settings import settings
 
 log = structlog.get_logger(__name__)
 
-# Optional import — fall back gracefully
+# Optional import — fall back gracefully. These names look unused to a linter
+# because the import itself is the test: they are re-imported inside
+# _check_with_evidently, and this block only decides which path runs.
 try:
-    import pandas as pd
-    from evidently import ColumnMapping
-    from evidently.report import Report
-    from evidently.metric_preset import DataDriftPreset
+    import pandas as pd  # noqa: F401
+    from evidently import ColumnMapping  # noqa: F401
+    from evidently.report import Report  # noqa: F401
+    from evidently.metric_preset import DataDriftPreset  # noqa: F401
 
     EVIDENTLY_AVAILABLE = True
 except ImportError:

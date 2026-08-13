@@ -13,9 +13,9 @@
 #   locust     — a load-testing client. Nothing serves traffic with it, and
 #                docker-compose runs it from the upstream locustio image anyway.
 #
-# sqlalchemy and psycopg2 stay: they are ~13MB together and docker-compose runs
-# a real Postgres for the audit sink. Cloud Run has no Postgres and api/main.py
-# already degrades to the in-memory audit log there.
+# sqlalchemy and psycopg2 are gone with Postgres itself: an engine was opened
+# at startup and nothing ever wrote through it, so the dependency bought a
+# cold-start connect and a README claim that was not true.
 #
 # torch is NOT listed here. The Dockerfile installs it from PyTorch's CPU index
 # first, because `pip install torch` on Linux pulls the CUDA build and roughly
@@ -42,9 +42,9 @@ numpy==1.26.4
 # Tried first; falls back to the in-process store when no Redis is reachable.
 redis==5.0.4
 
-# ── Database (audit log) ──────────────────────────────────────────────────────
-sqlalchemy==2.0.30
-psycopg2-binary==2.9.9
+# ── Database ─────────────────────────────────────────────────────────────────
+# None. The audit trail is in-memory plus a JSONL file. Postgres was connected
+# at startup and never written to, so it was removed rather than implemented.
 
 # ── UI ───────────────────────────────────────────────────────────────────────
 # Nothing. The control panel under web/ is plain HTML, CSS and JavaScript with

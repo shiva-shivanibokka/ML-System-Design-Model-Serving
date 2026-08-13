@@ -33,7 +33,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List
 
 import structlog
 
@@ -172,13 +172,21 @@ class DisagreementMonitor:
             records = list(self._records)
 
         if not records:
+            # Must return exactly the same keys as the populated path below.
+            # DisagreementStatsResponse requires all of them, so an empty
+            # window used to fail validation and answer 500 — and an empty
+            # window is the state every visitor arrives in, because the
+            # service scales to zero and nothing has been compared yet.
             return {
                 "total_comparisons": self._total_comparisons,
                 "window_size": 0,
+                "disagreements_in_window": 0,
+                "agreements_in_window": 0,
                 "disagreement_rate": 0.0,
                 "alert_active": False,
+                "alert_threshold": self._alert_threshold,
                 "direction_breakdown": {},
-                "avg_confidence_gap": 0.0,
+                "avg_confidence_gap_all": 0.0,
                 "avg_confidence_gap_on_disagreements": 0.0,
             }
 

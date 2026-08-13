@@ -7,10 +7,9 @@ Lifecycle (FastAPI lifespan):
      Startup does not block on it, so the port binds in under a second and the
      load is observable through /ready rather than hidden inside a dead socket.
   3. Connect the prediction cache (Redis, else in-process)
-  4. Connect PostgreSQL (audit persistence)
-  5. Load deployment state (from disk, or in-memory when EPHEMERAL_STATE=1)
-  6. Start auto-progression background thread
-  7. Inject models into router
+  4. Load deployment state (from disk, or in-memory when EPHEMERAL_STATE=1)
+  5. Start auto-progression background thread
+  6. Inject models into router
   → Server begins accepting traffic; /predict returns 503 until /ready is 200
 
   On shutdown:
@@ -94,9 +93,6 @@ cache = PredictionCache()
 # Warm-up results stored for /ready endpoint
 _warmup_results: dict = {}
 _startup_time: float = 0.0
-
-# PostgreSQL engine (optional — degrades gracefully if unavailable)
-_db_engine = None
 
 # Loading two transformer models and warming them takes tens of seconds. Doing
 # that inside lifespan means the socket is not bound until it finishes, so on a
@@ -209,7 +205,7 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan context manager.
     Everything before yield = startup. Everything after = shutdown.
     """
-    global _startup_time, _db_engine, _load_started_at
+    global _startup_time, _load_started_at
 
     configure_structlog()
     _startup_time = time.monotonic()
@@ -223,30 +219,12 @@ async def lifespan(app: FastAPI):
     # ── Redis cache ──────────────────────────────────────────────────────────
     cache.connect()
 
-    # ── PostgreSQL (audit) ───────────────────────────────────────────────────
-    # Same reasoning as the cache: an empty POSTGRES_HOST means there is no
-    # Postgres to reach, so skip the connect rather than spend cold-start
-    # seconds failing to resolve it.
-    if not settings.postgres.host:
-        log.info("postgres_not_configured", fallback="in_memory_audit_only")
-        _db_engine = None
-    else:
-        try:
-            import sqlalchemy
-
-            conn_str = (
-                f"postgresql+psycopg2://{settings.postgres.user}:"
-                f"{settings.postgres.password}@{settings.postgres.host}:"
-                f"{settings.postgres.port}/{settings.postgres.database}"
-            )
-            _db_engine = sqlalchemy.create_engine(conn_str, pool_pre_ping=True)
-            _db_engine.connect()
-            log.info("postgres_connected", host=settings.postgres.host)
-        except Exception as e:
-            log.warning(
-                "postgres_unavailable", error=str(e), fallback="file_audit_only"
-            )
-            _db_engine = None
+    # Postgres was connected here and then never written to — the audit trail
+    # has always lived in memory plus a JSONL file. Keeping an engine open for
+    # a database nothing writes to bought a dependency, a cold-start connect,
+    # and a README claim that was not true. Removed rather than implemented:
+    # the deployed service runs with no attached services at all, so a
+    # Postgres audit sink could never be exercised in the demo anyway.
 
     # ── Deployment state ────────────────────────────────────────────────────
     state_machine.load_persisted_state()
@@ -264,7 +242,6 @@ async def lifespan(app: FastAPI):
         "startup_complete",
         deployment_state=state_machine.state.value,
         cache_backend=cache.backend,
-        postgres=_db_engine is not None,
         models=_load_stage,  # still loading — /ready is the gate
     )
 

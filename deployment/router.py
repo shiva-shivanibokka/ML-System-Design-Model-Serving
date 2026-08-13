@@ -28,12 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
 from typing import Optional
 
 import structlog
 
-from configs.settings import settings
 from deployment.circuit_breaker import CircuitBreakerOpenError, circuit_breaker
 from deployment.state_machine import DeploymentState, state_machine
 from models.base import PredictionResult

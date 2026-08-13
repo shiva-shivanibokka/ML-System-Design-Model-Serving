@@ -34,7 +34,7 @@ from __future__ import annotations
 import threading
 import time
 from enum import Enum
-from typing import Callable, Optional, TypeVar
+from typing import Callable, TypeVar
 
 import structlog
 

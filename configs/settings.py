@@ -7,7 +7,7 @@ Access pattern: settings.models.v1.name
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
 
@@ -139,26 +139,6 @@ class APIConfig:
 
 
 @dataclass
-class GradioConfig:
-    host: str
-    port: int
-    api_base_url: str
-    api_base_url_local: str
-    theme: str
-
-
-@dataclass
-class PostgresConfig:
-    host: str
-    port: int
-    database: str
-    user: str
-    password: str
-    table_audit: str
-    table_predictions: str
-
-
-@dataclass
 class Settings:
     models: ModelsConfig
     deployment: DeploymentConfig
@@ -166,8 +146,6 @@ class Settings:
     cache: CacheConfig
     monitoring: MonitoringConfig
     api: APIConfig
-    gradio: GradioConfig
-    postgres: PostgresConfig
 
 
 # ---------------------------------------------------------------------------
@@ -186,14 +164,11 @@ def _load_settings() -> Settings:
     c = raw["cache"]
     mon = raw["monitoring"]
     api = raw["api"]
-    g = raw["gradio"]
-    pg = raw["postgres"]
 
-    # Allow environment variable overrides for Docker / Railway
+    # Allow environment variable overrides for Docker / Cloud Run. An empty
+    # REDIS_HOST is meaningful: it says there is no Redis here, which is not
+    # the same as Redis being down.
     redis_host = os.getenv("REDIS_HOST", c["host"])
-    pg_host = os.getenv("POSTGRES_HOST", pg["host"])
-    pg_password = os.getenv("POSTGRES_PASSWORD", pg["password"])
-    gateway_url = os.getenv("GATEWAY_URL", g["api_base_url"])
 
     return Settings(
         models=ModelsConfig(
@@ -225,22 +200,6 @@ def _load_settings() -> Settings:
             audit=AuditConfig(**mon["audit"]),
         ),
         api=APIConfig(**api),
-        gradio=GradioConfig(
-            host=g["host"],
-            port=g["port"],
-            api_base_url=gateway_url,
-            api_base_url_local=g["api_base_url_local"],
-            theme=g["theme"],
-        ),
-        postgres=PostgresConfig(
-            host=pg_host,
-            port=pg["port"],
-            database=pg["database"],
-            user=pg["user"],
-            password=pg_password,
-            table_audit=pg["table_audit"],
-            table_predictions=pg["table_predictions"],
-        ),
     )
 
 

@@ -113,24 +113,3 @@ api:
   log_level: "info"
   request_timeout_seconds: 10.0
 
-# -----------------------------------------------------------------------------
-# Gradio UI
-# -----------------------------------------------------------------------------
-gradio:
-  host: "0.0.0.0"
-  port: 7860
-  api_base_url: "http://gateway:8000"   # internal Docker network URL
-  api_base_url_local: "http://localhost:8000"  # for local (non-Docker) runs
-  theme: "soft"
-
-# -----------------------------------------------------------------------------
-# PostgreSQL (audit log persistence)
-# -----------------------------------------------------------------------------
-postgres:
-  host: "postgres"
-  port: 5432
-  database: "model_serving"
-  user: "postgres"
-  password: "postgres"
-  table_audit: "deployment_audit"
-  table_predictions: "prediction_log"
