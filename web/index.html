@@ -273,8 +273,12 @@
     <p class="explain">
       One sentence in means one dot on the chart. The count lives on the server, not in your browser,
       so it includes sentences other people have sent since it last restarted — send a few of your own
-      on <b>Predict</b> and watch it grow.
+      on <b>Predict</b> and watch it grow. Two things add no dot, both on purpose: a sentence you have
+      <b>already sent</b> comes back from the cache without either model running, and once you leave
+      <b>Shadow</b> the models stop being run against each other at all.
     </p>
+
+    <div id="comparisonNotice"></div>
 
     <div class="readouts" id="comparisonReadouts"></div>
 
@@ -430,7 +434,9 @@
     <span class="model-tag">Updated <b id="lastRefresh">—</b></span>
     <span class="lamps">
       <button class="key quiet" id="btnRefresh" style="padding:10px 20px">Refresh</button>
-      <button class="key quiet" id="btnLive" style="padding:10px 20px">Live: off</button>
+      <button class="q" data-tip="Re-reads every number on the tab you are looking at, straight from the running service. Nothing on this page is pre-recorded, so this is how you check whether something just changed.">?</button>
+      <button class="key quiet" id="btnLive" style="padding:10px 20px">Auto-refresh: off</button>
+      <button class="q tip-left" data-tip="Turns on a refresh every 5 seconds, so you can watch numbers move without clicking. It stops itself after 2 minutes — an open tab refreshing forever would keep the server awake all night for nobody.">?</button>
       <a class="model-tag" href="/docs" style="align-self:center">API docs →</a>
     </span>
   </div>

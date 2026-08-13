@@ -194,7 +194,7 @@ function wakeUp() {
   if (liveTimer) {
     clearInterval(liveTimer);
     liveTimer = null;
-    $("btnLive").textContent = "Live: off";
+    $("btnLive").textContent = "Auto-refresh: off";
   }
   wokeFromSleep = true;
   $("shell").hidden = true;
@@ -383,8 +383,13 @@ async function refreshRollout() {
       status.state.replace(/_/g, " "),
       "The share of real requests the new model is answering right now.")}
     ${ro("plain", "Requests handled", fmtInt(status.total_requests),
-      `${fmtInt(status.v2_requests)} of them by the new model`,
-      "Total requests since this stage began. The rollout will not act on fewer than 20 — a couple of bad requests is noise, not evidence.")}
+      // In shadow the new model runs on every sentence but answers nobody, so
+      // "answered by the new model" here would contradict the 0% split bar
+      // sitting directly beneath it.
+      status.state === "shadow"
+        ? `${fmtInt(status.v2_requests)} scored silently by the new model`
+        : `${fmtInt(status.v2_requests)} answered by the new model`,
+      "Counts each model run, so in Shadow one sentence counts twice — the old model answers you and the new one scores it silently. The rollout will not act on fewer than 20: a couple of bad requests is noise, not evidence.")}
     ${ro("speed", "Time at this stage", formatUptime(status.time_in_state_seconds),
       "auto-advance " + (status.auto_progression_enabled ? "on" : "off"),
       "How long the new model has held this share of traffic without tripping a limit.")}
@@ -470,10 +475,27 @@ async function act(path, label) {
 /* ───────────────────────── comparison ───────────────────────── */
 
 async function refreshComparison() {
-  const [s, recent] = await Promise.all([
+  const [s, recent, status] = await Promise.all([
     api("/monitoring/disagreement"),
     api("/monitoring/disagreement/comparisons?n=40"),
+    api("/deployment/status"),
   ]);
+
+  /*
+   * Comparisons are only recorded in shadow, because that is the only state
+   * where both models are run on the same sentence. Everywhere else the router
+   * picks one. Without saying so, this tab looks frozen or broken the moment
+   * someone promotes — which is exactly when they are watching it hardest.
+   */
+  const shadowing = status.state === "shadow";
+  $("comparisonNotice").innerHTML = shadowing
+    ? ""
+    : `<div class="notice">
+         <b>Not recording right now.</b> Both models are only run on the same sentence during
+         <b>Shadow</b>. You are at <b>${esc((status.state || "").replace(/_/g, " "))}</b>, where the
+         router sends each request to one model or the other — so the numbers below are frozen at the
+         last ${fmtInt(s.total_comparisons)} and will not move until this returns to Shadow.
+       </div>`;
 
   const alerting = s.disagreement_rate >= s.alert_threshold;
   $("comparisonReadouts").innerHTML = `
@@ -501,29 +523,49 @@ async function refreshComparison() {
       : `<tr><td class="k">No disagreements yet — the models have agreed every time</td><td class="n">—</td></tr>`
   }</tbody>`;
 
-  // The API returns labels, scores and input length but deliberately not the
-  // input text, so nothing anyone typed is echoed back out of monitoring.
+  /*
+   * The API returns labels, scores and input length but deliberately not the
+   * input text, so nothing anyone typed is echoed back out of monitoring.
+   *
+   * What is left has to work harder, so each row draws both confidences as
+   * bars. Two numbers four decimals apart are hard to compare by eye; two bars
+   * of near-identical length say "these models agree" instantly, and a row
+   * where the bars point at different labels is unmissable.
+   */
+  const first = (s.total_comparisons || cases.length) - cases.length + 1;
+
+  const gapWords = (g) =>
+    g < 0.005 ? "practically identical" : g < 0.05 ? "slightly apart" : "far apart";
+
+  const bar = (who, label, score, tone) => `
+    <div class="cmp-bar">
+      <span class="who">${who}</span>
+      <span class="track"><i class="${tone}" style="width:${(score * 100).toFixed(1)}%"></i></span>
+      <span class="val">${esc(label)} ${fixed(score, 4)}</span>
+    </div>`;
+
   $("comparisonList").innerHTML = cases.length
     ? cases
         .slice()
         .reverse()
-        .map(
-          (c) => `<div class="item">
+        .map((c, revIdx) => {
+          const n = first + (cases.length - 1 - revIdx);
+          return `<div class="item cmp ${c.agrees ? "" : "split"}">
             <div class="top">
+              <span class="seq">#${n}</span>
               <span class="trig" style="color:${c.agrees ? "var(--ok)" : "var(--gap)"}">
                 ${c.agrees ? "agreed" : "disagreed"}</span>
-              <span class="arrow">${esc(c.v1_label)} vs ${esc(c.v2_label)}</span>
-              <time>gap ${fixed(c.confidence_gap, 4)}</time>
+              <time>gap ${fixed(c.confidence_gap, 4)} — ${gapWords(c.confidence_gap ?? 0)}</time>
             </div>
-            <div class="note">
-              old model ${fixed(c.v1_score, 4)} · new model ${fixed(c.v2_score, 4)}
-              · ${fmtInt(c.input_length)} characters
-            </div>
-          </div>`
-        )
+            ${bar("old", c.v1_label, c.v1_score, "ok")}
+            ${bar("new", c.v2_label, c.v2_score, c.agrees ? "speed" : "alarm")}
+            <div class="note">${fmtInt(c.input_length)}-character sentence — the text itself is not
+              stored, so nothing anyone types is echoed back here</div>
+          </div>`;
+        })
         .join("")
-    : `<div class="empty">Nothing compared yet. Send a sentence on the Predict tab — both models
-       read every one, so points appear here immediately.</div>`;
+    : `<div class="empty">Nothing compared yet. Send a sentence on the Predict tab — in Shadow both
+       models score every one, so a row appears here immediately.</div>`;
 }
 
 /*
@@ -781,7 +823,7 @@ $("btnLive").addEventListener("click", () => {
   if (liveTimer) {
     clearInterval(liveTimer);
     liveTimer = null;
-    $("btnLive").textContent = "Live: off";
+    $("btnLive").textContent = "Auto-refresh: off";
     return;
   }
   liveStopAt = Date.now() + 120000;
@@ -789,13 +831,13 @@ $("btnLive").addEventListener("click", () => {
     if (Date.now() > liveStopAt) {
       clearInterval(liveTimer);
       liveTimer = null;
-      $("btnLive").textContent = "Live: off";
-      toast("Live updates stopped after 2 minutes");
+      $("btnLive").textContent = "Auto-refresh: off";
+      toast("Auto-refresh stopped after 2 minutes");
       return;
     }
     refreshAll();
   }, 5000);
-  $("btnLive").textContent = "Live: on";
+  $("btnLive").textContent = "Auto-refresh: on";
   refreshAll();
 });
 

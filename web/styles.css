@@ -180,16 +180,23 @@ a { color: var(--traffic); }
   border-radius: 12px;
   padding: 18px 19px;
   position: relative;
-  overflow: hidden;
 }
 
-.step::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; }
+.step::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: 12px 12px 0 0;
+}
+
 .step::after {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   opacity: 0.6;
+  border-radius: inherit;
 }
 
 .step:nth-child(1)::before { background: linear-gradient(90deg, var(--traffic), transparent); }
@@ -429,7 +436,7 @@ a { color: var(--traffic); }
   font-weight: 700;
 }
 
-.q:hover, .q:focus-visible {
+.q:hover, .q:focus, .q:focus-visible {
   color: var(--gnd);
   border-color: transparent;
   background: linear-gradient(135deg, var(--traffic), var(--speed));
@@ -465,7 +472,9 @@ a { color: var(--traffic); }
   pointer-events: none;
 }
 
-.q:hover::after, .q:focus-visible::after { display: block; }
+/* :focus as well as :focus-visible — a tap on a phone focuses the button but
+ * does not match :focus-visible, so touch users got no tooltip at all. */
+.q:hover::after, .q:focus::after, .q:focus-visible::after { display: block; }
 
 /* Tooltips near the right edge would otherwise overflow the viewport. */
 .q.tip-left::after { left: auto; right: 0; transform: none; }
@@ -476,20 +485,31 @@ a { color: var(--traffic); }
 @media (max-width: 980px) { .readouts { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 520px) { .readouts { grid-template-columns: 1fr; } }
 
+/* No overflow:hidden. These cards each carry a tooltip, tooltips open upward
+ * out of the card, and clipping them to the card erased every one of them —
+ * the ? highlighted on hover and nothing appeared. The decorative layers are
+ * rounded to match the card instead, which is what the clip was for. */
 .ro {
   background: var(--sheen), var(--panel);
   border: 1px solid var(--rule);
   border-radius: 14px;
   padding: 19px 21px;
   position: relative;
-  overflow: hidden;
 }
 
 /* Two layers per readout: a 3px cap in the metric's own hue, and a soft wash
  * of the same hue bleeding down from it, so a row of four cards reads as four
  * different measurements at a glance rather than four identical boxes. */
-.ro::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--rule-hi); }
-.ro::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+.ro::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--rule-hi);
+  border-radius: 14px 14px 0 0;
+}
+
+.ro::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; }
 .ro > * { position: relative; z-index: 1; }
 
 .ro.traffic::before { background: linear-gradient(90deg, var(--traffic), transparent 92%); }
@@ -753,6 +773,30 @@ textarea:focus { outline: none; border-color: var(--traffic); box-shadow: 0 0 0 
 .list .item .arrow { color: var(--text); }
 .list .item .note { color: var(--dim); font-size: 13px; margin-top: 7px; line-height: 1.6; }
 
+/* One comparison row: sequence number, verdict, then both confidences drawn as
+ * bars so agreement is legible without reading four decimal places. */
+.list .item.cmp .seq { color: var(--faint); font-size: 13px; letter-spacing: 0.08em; }
+.list .item.cmp.split { border-color: rgba(255, 107, 163, 0.5); }
+
+.cmp-bar {
+  display: grid;
+  grid-template-columns: 34px 1fr 152px;
+  align-items: center;
+  gap: 11px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+@media (max-width: 620px) { .cmp-bar { grid-template-columns: 30px 1fr 120px; gap: 8px; } }
+
+.cmp-bar .who { color: var(--faint); text-transform: uppercase; letter-spacing: 0.08em; }
+.cmp-bar .track { height: 9px; background: var(--gnd); border-radius: 999px; overflow: hidden; }
+.cmp-bar .track i { display: block; height: 100%; border-radius: 999px; }
+.cmp-bar .track i.ok { background: linear-gradient(90deg, var(--ok), var(--traffic)); }
+.cmp-bar .track i.speed { background: linear-gradient(90deg, var(--speed), var(--traffic)); }
+.cmp-bar .track i.alarm { background: linear-gradient(90deg, var(--alarm), var(--gap)); }
+.cmp-bar .val { text-align: right; color: var(--text); letter-spacing: 0.02em; }
+
 .empty {
   color: var(--dim);
   font-size: 15px;
@@ -763,6 +807,19 @@ textarea:focus { outline: none; border-color: var(--traffic); box-shadow: 0 0 0 
   border: 1px dashed var(--rule-hi);
   border-radius: 12px;
 }
+
+.notice {
+  margin: 0 0 20px;
+  padding: 15px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 196, 107, 0.4);
+  background: linear-gradient(140deg, rgba(255, 196, 107, 0.14), rgba(255, 196, 107, 0.03));
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.notice b { color: var(--warn); font-weight: 700; }
 
 /* ───────────────────────── notices ───────────────────────── */
 
