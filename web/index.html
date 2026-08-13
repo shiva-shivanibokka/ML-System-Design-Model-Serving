@@ -161,7 +161,9 @@
           <p>Where you send text in. Both models score every sentence, but only one answer is
             returned to you — which one depends on the rollout stage. Sending the same sentence twice
             returns the stored answer without running the model at all.</p>
-          <p class="look">Look at: the big verdict word, and <b>answered by</b> underneath it.</p>
+          <p class="look">Look at: the big verdict word, and <b>answered by</b> underneath it. There
+            is no answer key — the verdict is the model's reading, not a checked fact. Sample
+            sentences add what a person would call them, so you can spot a wrong answer.</p>
         </div>
 
         <div class="entry comparison">
@@ -221,6 +223,14 @@
       always answers while the new one works silently in the background, and from <b>Canary 5</b>
       onward the new model starts answering a share of requests for real. Sending the same sentence
       twice returns a stored answer instantly instead of running the model again.
+    </p>
+    <p class="explain">
+      <b>Nothing here knows the right answer.</b> The model returns its own reading of the sentence
+      and how confident it is — there is no answer key to check it against, which is true of every
+      model serving live traffic. That is precisely why this system watches whether the two models
+      <b>agree</b> and whether the incoming text has <b>changed shape</b>: both work without labels,
+      and accuracy does not. The built-in sample sentences are the exception — those come with what
+      a person would call them, so you can catch the model being wrong.
     </p>
 
     <div class="grid-wide">

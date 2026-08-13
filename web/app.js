@@ -88,6 +88,34 @@ const SENTENCES = {
 
 const ALL_SENTENCES = Object.values(SENTENCES).flat();
 
+/*
+ * What a person would call each built-in sample.
+ *
+ * This is NOT ground truth in the machine-learning sense and the panel must not
+ * claim it is: nothing in the serving path knows the right answer to anything.
+ * Real traffic arrives unlabelled, which is exactly why the monitoring here is
+ * built on disagreement and drift — both work without an answer key, and
+ * accuracy does not.
+ *
+ * It is worth having anyway for the samples, because the sarcastic ones are
+ * where a sentiment model visibly fails, and a demo that can never be seen to
+ * be wrong is not showing you very much.
+ */
+const EXPECTED = new Map([
+  ...SENTENCES.negative.map((t) => [t, "NEGATIVE"]),
+  ...SENTENCES.positive.map((t) => [t, "POSITIVE"]),
+  // Genuinely two-sided — praise and complaint in the same breath. There is no
+  // single correct answer, and saying otherwise would be the dishonest part.
+  ...SENTENCES.mixed.map((t) => [t, "MIXED"]),
+  ["Not bad at all, honestly.", "POSITIVE"],
+  ["Oh good, another update that moves every button.", "NEGATIVE"],
+  ["I can't say I hated it.", "POSITIVE"],
+  ["Well, that was certainly a decision someone made.", "NEGATIVE"],
+  ["It only broke twice, which for this brand is impressive.", "NEGATIVE"],
+  ["Sure, a two-hour queue is exactly how I wanted to spend the morning.", "NEGATIVE"],
+  ["Nothing about it is memorable, and I mean that kindly.", "NEGATIVE"],
+]);
+
 /* Never returns what is already in the box — a random button that appears to
  * do nothing reads as broken. */
 function randomSentence(kind) {
@@ -370,7 +398,7 @@ async function runPredict(text) {
     });
     lastPredictText = body;
     rememberSent(r.trace_id, body);
-    renderPrediction(r);
+    renderPrediction(r, body);
     await refreshChrome();
   } catch (e) {
     if (e.notReady) wakeUp();
@@ -380,9 +408,29 @@ async function runPredict(text) {
   }
 }
 
-function renderPrediction(r) {
+function renderPrediction(r, text) {
   const negative = r.label.toUpperCase().startsWith("NEG");
   const colour = negative ? "var(--alarm)" : "var(--ok)";
+
+  /*
+   * Only the built-in samples carry an expected reading, and it is a human
+   * opinion rather than a dataset label — worded so nobody mistakes it for the
+   * model being scored against an answer key. Anything typed by hand gets no
+   * verdict at all, because there is nothing to compare it to.
+   */
+  const expect = EXPECTED.get((text ?? "").trim());
+  let judged = "";
+  if (expect === "MIXED") {
+    judged = `<div class="judged mixed">A person would call this one <b>genuinely mixed</b> —
+      there is praise and complaint in the same sentence, so either answer is defensible.</div>`;
+  } else if (expect) {
+    const right = expect === r.label.toUpperCase();
+    judged = right
+      ? `<div class="judged right">A person would read this as <b>${expect}</b> too.</div>`
+      : `<div class="judged wrong">A person would read this as <b>${expect}</b> — the model got
+         this one wrong. Sarcasm and understatement are where sentiment models fail.</div>`;
+  }
+
   $("predictResult").innerHTML = `
     <div class="result">
       <div class="label ${negative ? "neg" : "pos"}">${esc(r.label)}</div>
@@ -393,6 +441,7 @@ function renderPrediction(r) {
         <span>took <b>${fixed(r.latency_ms, 2)} ms</b></span>
         <span>${r.cache_hit ? "<b>from cache</b> — the model did not run" : "the model ran"}</span>
       </div>
+      ${judged}
     </div>`;
 
   $("predictDetail").innerHTML = `<tbody>
@@ -553,7 +602,7 @@ async function refreshComparison() {
   `;
 
   const cases = recent.comparisons || [];
-  drawGapChart(cases, s.avg_confidence_gap_all ?? 0);
+  drawGapChart(cases, s.avg_confidence_gap_all ?? 0, s.total_comparisons ?? cases.length);
 
   const dir = s.direction_breakdown || {};
   $("directionTable").innerHTML = `<tbody>${
@@ -617,7 +666,7 @@ async function refreshComparison() {
  * at 0–1: the gap is typically around 0.002, so a fixed axis would draw a flat
  * line along the bottom and hide the very thing the chart exists to show.
  */
-function drawGapChart(cases, meanGap) {
+function drawGapChart(cases, meanGap, total) {
   const svg = $("gapChart");
   const W = 720;
   const H = 200;
@@ -677,7 +726,16 @@ function drawGapChart(cases, meanGap) {
           stroke="#A7AECB" stroke-width="1.4" stroke-dasharray="5 5"/>
     ${dots}
     <text x="8" y="18" fill="#7E86A6" font-family="ui-monospace, monospace" font-size="12">
-      top of chart = ${peak.toFixed(4)}</text>`;
+      top of chart = ${peak.toFixed(4)}</text>
+    <text x="${W - 8}" y="18" text-anchor="end" fill="#7E86A6"
+          font-family="ui-monospace, monospace" font-size="12">${
+            // The endpoint returns the last 40; the counter beside the chart is
+            // for all time. Past 40 those two numbers differ, and a chart that
+            // does not say so looks like it has lost points.
+            total > cases.length
+              ? `showing the most recent ${cases.length} of ${fmtInt(total)}`
+              : `${cases.length} ${cases.length === 1 ? "sentence" : "sentences"}`
+          }</text>`;
 }
 
 /* ───────────────────────── drift ───────────────────────── */

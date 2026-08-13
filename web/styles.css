@@ -755,6 +755,26 @@ textarea:focus { outline: none; border-color: var(--traffic); box-shadow: 0 0 0 
 .result .meta { font-size: 13px; color: var(--dim); letter-spacing: 0.04em; display: flex; gap: 20px; flex-wrap: wrap; }
 .result .meta b { color: var(--text); font-weight: 700; }
 
+/* How a person would read the sentence, for the built-in samples only. Kept
+ * visually apart from the model's own answer so the two are never confused. */
+.judged {
+  margin-top: 16px;
+  padding: 13px 16px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  border: 1px solid var(--rule-hi);
+  color: var(--dim);
+}
+
+.judged b { font-weight: 700; }
+.judged.right { border-color: rgba(77, 235, 166, 0.45); background: rgba(77, 235, 166, 0.08); }
+.judged.right b { color: var(--ok); }
+.judged.wrong { border-color: rgba(255, 107, 133, 0.5); background: rgba(255, 107, 133, 0.1); }
+.judged.wrong b { color: var(--alarm); }
+.judged.mixed { border-color: rgba(255, 196, 107, 0.45); background: rgba(255, 196, 107, 0.08); }
+.judged.mixed b { color: var(--warn); }
+
 /* ───────────────────────── lists ───────────────────────── */
 
 .list {
