@@ -559,8 +559,7 @@ async function refreshComparison() {
             </div>
             ${bar("old", c.v1_label, c.v1_score, "ok")}
             ${bar("new", c.v2_label, c.v2_score, c.agrees ? "speed" : "alarm")}
-            <div class="note">${fmtInt(c.input_length)}-character sentence — the text itself is not
-              stored, so nothing anyone types is echoed back here</div>
+            <div class="note">${fmtInt(c.input_length)}-character sentence</div>
           </div>`;
         })
         .join("")
