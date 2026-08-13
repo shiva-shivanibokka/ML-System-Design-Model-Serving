@@ -108,10 +108,25 @@ let lastPredictText = "";
 
 /* ───────────────────────── fetch helpers ───────────────────────── */
 
-async function api(path, opts) {
+/*
+ * A 503 means the models are not loaded — either the very first start, or this
+ * tab outliving the container and landing on a cold one.
+ *
+ * It has to throw. It once did not: /ready answers 503 by design during warm-up
+ * and the boot poll wants that body, so 503 was exempted for every caller. That
+ * handed /predict's error payload to the success path, where reading .label off
+ * {detail: "Models not ready"} threw a TypeError and Classify appeared to do
+ * nothing. Only the boot poll opts out, and it says so.
+ */
+async function api(path, opts, { allow503 = false } = {}) {
   const res = await fetch(path, opts);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok && res.status !== 503) {
+  if (res.status === 503 && !allow503) {
+    const err = new Error(body.detail || "The server is still starting up.");
+    err.notReady = true;
+    throw err;
+  }
+  if (!res.ok && !(res.status === 503 && allow503)) {
     throw new Error(body.detail || `${res.status} ${res.statusText}`);
   }
   return body;
@@ -148,8 +163,49 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * meaning for orchestrators, and is consulted here only to retrieve the
  * exception text when a load has actually failed.
  */
+let booting = false;
+let wokeFromSleep = false;
+
+const SLEEP_NOTE =
+  "The server shuts down when nobody is using it, so it costs nothing to run. Loading both" +
+  " models back into memory takes about a minute. Nothing you did caused this — your sentence" +
+  " has not been lost, and the page reopens by itself.";
+
 async function boot() {
+  if (booting) return;
+  booting = true;
   const started = Date.now();
+  try {
+    await bootLoop(started);
+  } finally {
+    booting = false;
+  }
+}
+
+/*
+ * Cloud Run stops the container when nobody is using it, so a tab left open
+ * long enough will find the next click landing on a cold instance. Rather than
+ * failing that click, put the same starting-up screen back and resume the poll;
+ * the shell reopens by itself once the models are loaded.
+ */
+function wakeUp() {
+  const el = $("boot");
+  if (!el || !el.hidden) return;
+  if (liveTimer) {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    $("btnLive").textContent = "Live: off";
+  }
+  wokeFromSleep = true;
+  $("shell").hidden = true;
+  el.hidden = false;
+  $("bootStage").classList.remove("failed");
+  $("bootStage").textContent = "The server went to sleep — waking it back up";
+  $("bootSub").textContent = SLEEP_NOTE;
+  boot();
+}
+
+async function bootLoop(started) {
   for (;;) {
     let h;
     try {
@@ -167,8 +223,11 @@ async function boot() {
 
     const elapsed = Math.round((Date.now() - started) / 1000);
     if (stage !== "not_started" && stage !== "failed") {
-      $("bootSub").textContent =
-        `${elapsed} seconds so far. The page opens by itself as soon as both models are ready.`;
+      // Someone who arrived to a sleeping server needs the explanation to stay
+      // on screen, not be replaced by a stopwatch one poll later.
+      $("bootSub").textContent = wokeFromSleep
+        ? `${SLEEP_NOTE} — ${elapsed} seconds so far.`
+        : `${elapsed} seconds so far. The page opens by itself as soon as both models are ready.`;
     }
 
     const at = STAGES.indexOf(stage);
@@ -179,13 +238,15 @@ async function boot() {
 
     if (stage === "failed") {
       $("bootStage").classList.add("failed");
-      const detail = await api("/ready").catch(() => ({}));
+      const detail = await api("/ready", undefined, { allow503: true }).catch(() => ({}));
       $("bootSub").textContent = detail.load_error || "No error detail returned.";
       return;
     }
 
     if (stage === "ready") {
-      $("boot").remove();
+      // Hidden, not removed: the container can sleep again later and this
+      // screen is what explains the wait when it does.
+      $("boot").hidden = true;
       $("shell").hidden = false;
       await refreshAll();
       return;
@@ -273,7 +334,8 @@ async function runPredict(text) {
     renderPrediction(r);
     await refreshChrome();
   } catch (e) {
-    toast(e.message, true);
+    if (e.notReady) wakeUp();
+    else toast(e.message, true);
   } finally {
     $("btnPredict").disabled = false;
   }
@@ -400,7 +462,8 @@ async function act(path, label) {
     await refreshChrome();
     await refreshRollout();
   } catch (e) {
-    toast(e.message, true);
+    if (e.notReady) wakeUp();
+    else toast(e.message, true);
   }
 }
 
@@ -672,7 +735,8 @@ async function refreshAll() {
     await refreshChrome();
     await VIEWS[current]();
   } catch (e) {
-    toast(e.message, true);
+    if (e.notReady) wakeUp();
+    else toast(e.message, true);
   }
 }
 

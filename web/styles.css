@@ -764,6 +764,11 @@ textarea:focus { outline: none; border-color: var(--traffic); box-shadow: 0 0 0 
 
 /* ───────────────────────── boot overlay ───────────────────────── */
 
+/* The overlay stays in the document after the first load so it can come back
+ * when the container sleeps, and .boot's display:flex would otherwise beat the
+ * hidden attribute. */
+.boot[hidden] { display: none; }
+
 .boot {
   position: fixed;
   inset: 0;
