@@ -52,6 +52,12 @@ class DisagreementRecord:
     agrees: bool
     confidence_gap: float  # abs(v1_score - v2_score)
     input_length: int
+    # The request's trace id, not its text. Monitoring deliberately never holds
+    # user input: on a public demo that would mean every visitor's sentences
+    # readable by every other visitor. A caller that sent the request already
+    # has both the trace id and the text and can pair them up locally, which
+    # gives the sender their own text back without the server ever storing it.
+    trace_id: str = ""
 
 
 class DisagreementMonitor:
@@ -81,6 +87,7 @@ class DisagreementMonitor:
         v1_score: float,
         v2_score: float,
         input_length: int,
+        trace_id: str = "",
     ) -> bool:
         """
         Record a shadow comparison and return True if disagreement alert triggered.
@@ -98,6 +105,7 @@ class DisagreementMonitor:
             agrees=agrees,
             confidence_gap=confidence_gap,
             input_length=input_length,
+            trace_id=trace_id,
         )
 
         alert_triggered = False
@@ -259,6 +267,9 @@ class DisagreementMonitor:
 
         return [
             {
+                # Lets the sender pair a row back to the text it sent, without
+                # that text ever being held here. See DisagreementRecord.
+                "trace_id": r.trace_id,
                 "v1_label": r.v1_label,
                 "v2_label": r.v2_label,
                 "v1_score": round(r.v1_score, 4),

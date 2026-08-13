@@ -375,6 +375,7 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
             v1_score=user_result.score,
             v2_score=shadow_v2_result.score,
             input_length=user_result.input_length,
+            trace_id=trace_id,
         )
 
     # ── Drift detection (track input distribution) ─────────────────────────

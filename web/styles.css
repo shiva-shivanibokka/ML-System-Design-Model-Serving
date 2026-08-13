@@ -776,6 +776,16 @@ textarea:focus { outline: none; border-color: var(--traffic); box-shadow: 0 0 0 
 .list .item.cmp .seq { color: var(--faint); font-size: 13px; letter-spacing: 0.08em; }
 .list .item.cmp.split { border-color: rgba(255, 107, 163, 0.5); }
 
+/* The sentence, when this browser is the one that sent it. */
+.list .item.cmp .said {
+  margin: 9px 0 4px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.list .item.cmp .said.other { color: var(--faint); font-size: 13px; font-style: italic; }
+
 .cmp-bar {
   display: grid;
   grid-template-columns: 34px 1fr 152px;

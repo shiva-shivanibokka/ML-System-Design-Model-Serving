@@ -92,6 +92,28 @@ def test_recent_comparisons_respects_n(monitor):
     assert len(monitor.get_recent_comparisons(4)) == 4
 
 
+def test_comparisons_carry_the_trace_id_but_never_the_text(monitor):
+    """
+    The panel pairs a row back to the sentence the sender typed using the trace
+    id, because the server refuses to hold the text. If the id stops coming
+    back, that pairing silently degrades to "sent from another session" for
+    everyone, including the person who sent it — no error, just a panel that
+    quietly stops showing anything.
+    """
+    monitor.record("POSITIVE", "POSITIVE", 0.9, 0.88, 20, trace_id="abc-123")
+
+    (row,) = monitor.get_recent_comparisons(10)
+    assert row["trace_id"] == "abc-123"
+    # Nothing resembling user input may appear in a monitoring payload.
+    assert not any("text" in key for key in row)
+
+
+def test_trace_id_is_optional(monitor):
+    """Callers that do not supply one must still record, not raise."""
+    monitor.record("POSITIVE", "NEGATIVE", 0.9, 0.4, 20)
+    assert monitor.get_recent_comparisons(1)[0]["trace_id"] == ""
+
+
 def test_window_is_bounded(monitor):
     """The rolling window must not grow without limit on a long-lived process."""
     limit = monitor._window_size

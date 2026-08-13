@@ -106,6 +106,44 @@ let liveTimer = null;
 let liveStopAt = 0;
 let lastPredictText = "";
 
+/*
+ * trace_id → the sentence this browser sent under it.
+ *
+ * The server records a trace id against each comparison but never the text,
+ * so nothing anyone types can be read back by anyone else. The half that
+ * completes the picture lives here: whoever sent a request already has both
+ * the id and the text, so the sender — and only the sender — can show what a
+ * row was actually about.
+ *
+ * sessionStorage rather than memory: a page refresh should not blank out the
+ * sentences you sent a minute ago. Per-tab and cleared on close, which is the
+ * right lifetime for something the server deliberately refuses to keep.
+ */
+const SENT_KEY = "model-serving.sent-text.v1";
+
+function loadSent() {
+  try {
+    return new Map(JSON.parse(sessionStorage.getItem(SENT_KEY) || "[]"));
+  } catch {
+    return new Map();
+  }
+}
+
+const sentText = loadSent();
+
+function rememberSent(traceId, text) {
+  if (!traceId) return;
+  sentText.set(traceId, text);
+  // The comparison window itself is capped, so an unbounded map here would
+  // only ever grow to hold ids the server has already forgotten.
+  while (sentText.size > 120) sentText.delete(sentText.keys().next().value);
+  try {
+    sessionStorage.setItem(SENT_KEY, JSON.stringify([...sentText]));
+  } catch {
+    /* private mode, or full — the panel works without it */
+  }
+}
+
 /* ───────────────────────── fetch helpers ───────────────────────── */
 
 /*
@@ -331,6 +369,7 @@ async function runPredict(text) {
       body: JSON.stringify({ text: body }),
     });
     lastPredictText = body;
+    rememberSent(r.trace_id, body);
     renderPrediction(r);
     await refreshChrome();
   } catch (e) {
@@ -550,6 +589,11 @@ async function refreshComparison() {
         .reverse()
         .map((c, revIdx) => {
           const n = first + (cases.length - 1 - revIdx);
+          const mine = sentText.get(c.trace_id);
+          const said = mine
+            ? `<div class="said">“${esc(mine)}”</div>`
+            : `<div class="said other">Sent from another session — the server keeps the scores but
+                 never the text, so only whoever sent this can see it</div>`;
           return `<div class="item cmp ${c.agrees ? "" : "split"}">
             <div class="top">
               <span class="seq">#${n}</span>
@@ -557,9 +601,10 @@ async function refreshComparison() {
                 ${c.agrees ? "agreed" : "disagreed"}</span>
               <time>gap ${fixed(c.confidence_gap, 4)} — ${gapWords(c.confidence_gap ?? 0)}</time>
             </div>
+            ${said}
             ${bar("old", c.v1_label, c.v1_score, "ok")}
             ${bar("new", c.v2_label, c.v2_score, c.agrees ? "speed" : "alarm")}
-            <div class="note">${fmtInt(c.input_length)}-character sentence</div>
+            <div class="note">${fmtInt(c.input_length)} characters</div>
           </div>`;
         })
         .join("")
