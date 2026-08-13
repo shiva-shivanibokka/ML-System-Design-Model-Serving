@@ -39,6 +39,65 @@ const LANE_LABEL = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+/*
+ * Sample sentences, deliberately spread across domains — product reviews,
+ * restaurants, film, books, support tickets, social posts — rather than one
+ * kind of text. A model that only ever sees product reviews here looks more
+ * reliable than it is; the sarcasm and mixed-feeling sets are where the two
+ * models actually have room to disagree, which is the point of the demo.
+ */
+const SENTENCES = {
+  negative: [
+    "The battery died after two days and support never replied.",
+    "Waited forty minutes for a table and the food arrived cold.",
+    "The plot dragged for two hours and then simply stopped.",
+    "Third outage this month — I am moving my account elsewhere.",
+    "The instructions were wrong and I had to take the whole thing apart again.",
+    "Nobody at the counter would look up, let alone help.",
+    "It arrived cracked, and the return form does not load.",
+  ],
+  positive: [
+    "Absolutely brilliant — better than I expected for the price.",
+    "The staff remembered my name and the coffee was perfect.",
+    "I finished the whole book in one sitting and started it again the next day.",
+    "Setup took four minutes and it has not crashed once.",
+    "Best decision I have made all year, genuinely.",
+    "The engineer called back within the hour and fixed it on the spot.",
+    "Every seat in the room was still full at the end of the last talk.",
+  ],
+  mixed: [
+    "It works, I suppose, though I would not buy it again.",
+    "Beautiful hotel, terrible breakfast, and the wifi barely worked.",
+    "Great acting, but the script gave them almost nothing to do.",
+    "Fast delivery. Wrong item.",
+    "The app is fine once you get past the setup, which is awful.",
+    "Cheap, cheerful, and it will probably fall apart by spring.",
+    "I liked the first half enough to forgive the second.",
+  ],
+  tricky: [
+    "Not bad at all, honestly.",
+    "Oh good, another update that moves every button.",
+    "I can't say I hated it.",
+    "Well, that was certainly a decision someone made.",
+    "It only broke twice, which for this brand is impressive.",
+    "Sure, a two-hour queue is exactly how I wanted to spend the morning.",
+    "Nothing about it is memorable, and I mean that kindly.",
+  ],
+};
+
+const ALL_SENTENCES = Object.values(SENTENCES).flat();
+
+/* Never returns what is already in the box — a random button that appears to
+ * do nothing reads as broken. */
+function randomSentence(kind) {
+  const pool = kind && kind !== "any" ? SENTENCES[kind] : ALL_SENTENCES;
+  const current = $("predictText").value.trim();
+  const fresh = pool.filter((s) => s !== current);
+  const from = fresh.length ? fresh : pool;
+  return from[Math.floor(Math.random() * from.length)];
+}
+
 const pct = (x) => `${(x * 100).toFixed(2)}%`;
 const fixed = (x, n = 1) => (x === null || x === undefined ? "—" : Number(x).toFixed(n));
 const fmtInt = (n) => Number(n || 0).toLocaleString("en-US");
@@ -417,14 +476,14 @@ function drawGapChart(cases, meanGap) {
 
   if (!cases.length) {
     svg.innerHTML = `
-      <g stroke="#1D2130" stroke-width="1">
+      <g stroke="#262B40" stroke-width="1">
         <line x1="0" y1="50" x2="${W}" y2="50"/><line x1="0" y1="100" x2="${W}" y2="100"/>
         <line x1="0" y1="150" x2="${W}" y2="150"/>
       </g>
-      <text x="${W / 2}" y="${H / 2 - 6}" text-anchor="middle" fill="#7B8199"
-            font-family="ui-monospace, monospace" font-size="13">Nothing compared yet</text>
-      <text x="${W / 2}" y="${H / 2 + 16}" text-anchor="middle" fill="#565C73"
-            font-family="ui-monospace, monospace" font-size="11">
+      <text x="${W / 2}" y="${H / 2 - 6}" text-anchor="middle" fill="#A7AECB"
+            font-family="ui-monospace, monospace" font-size="15">Nothing compared yet</text>
+      <text x="${W / 2}" y="${H / 2 + 18}" text-anchor="middle" fill="#7E86A6"
+            font-family="ui-monospace, monospace" font-size="12">
         Send a sentence on the Predict tab and a point appears here</text>`;
     return;
   }
@@ -442,28 +501,33 @@ function drawGapChart(cases, meanGap) {
   const dots = cases
     .map((c, i) =>
       c.agrees
-        ? `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="3" fill="#00E5C7"/>`
-        : `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="5" fill="#FF4D8D"/>`
+        ? `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="4" fill="#22F0D4"/>`
+        : `<circle cx="${pts[i][0].toFixed(1)}" cy="${pts[i][1].toFixed(1)}" r="6.5" fill="#FF6BA3"
+             stroke="#FF6BA3" stroke-opacity="0.35" stroke-width="6"/>`
     )
     .join("");
 
   svg.innerHTML = `
     <defs>
       <linearGradient id="gapFill" x1="0" x2="0" y1="0" y2="1">
-        <stop offset="0%" stop-color="#00E5C7" stop-opacity="0.34"/>
-        <stop offset="100%" stop-color="#00E5C7" stop-opacity="0"/>
+        <stop offset="0%" stop-color="#22F0D4" stop-opacity="0.45"/>
+        <stop offset="60%" stop-color="#9B82FF" stop-opacity="0.16"/>
+        <stop offset="100%" stop-color="#9B82FF" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="gapLine" x1="0" x2="1" y1="0" y2="0">
+        <stop offset="0%" stop-color="#22F0D4"/><stop offset="100%" stop-color="#9B82FF"/>
       </linearGradient>
     </defs>
-    <g stroke="#1D2130" stroke-width="1">
+    <g stroke="#262B40" stroke-width="1">
       <line x1="0" y1="50" x2="${W}" y2="50"/><line x1="0" y1="100" x2="${W}" y2="100"/>
       <line x1="0" y1="150" x2="${W}" y2="150"/>
     </g>
     <path fill="url(#gapFill)" d="${area}"/>
-    <path fill="none" stroke="#00E5C7" stroke-width="2.2" d="M${line}"/>
+    <path fill="none" stroke="url(#gapLine)" stroke-width="2.8" d="M${line}"/>
     <line x1="0" y1="${meanY.toFixed(1)}" x2="${W}" y2="${meanY.toFixed(1)}"
-          stroke="#7B8199" stroke-width="1.2" stroke-dasharray="5 5"/>
+          stroke="#A7AECB" stroke-width="1.4" stroke-dasharray="5 5"/>
     ${dots}
-    <text x="8" y="16" fill="#565C73" font-family="ui-monospace, monospace" font-size="10">
+    <text x="8" y="18" fill="#7E86A6" font-family="ui-monospace, monospace" font-size="12">
       top of chart = ${peak.toFixed(4)}</text>`;
 }
 
@@ -624,8 +688,12 @@ $("tabs").addEventListener("click", async (ev) => {
 });
 
 $("samples").addEventListener("click", (ev) => {
-  const b = ev.target.closest("button[data-t]");
-  if (b) $("predictText").value = b.dataset.t;
+  const b = ev.target.closest("button[data-kind]");
+  if (b) $("predictText").value = randomSentence(b.dataset.kind);
+});
+
+$("btnRandom").addEventListener("click", () => {
+  $("predictText").value = randomSentence("any");
 });
 
 $("btnPredict").addEventListener("click", () => runPredict());

@@ -18,10 +18,11 @@
       <svg viewBox="0 0 600 150" preserveAspectRatio="none" aria-hidden="true">
         <defs>
           <linearGradient id="bootLine" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stop-color="#00E5C7"/><stop offset="100%" stop-color="#7C5CFF"/>
+            <stop offset="0%" stop-color="#22F0D4"/><stop offset="55%" stop-color="#9B82FF"/>
+            <stop offset="100%" stop-color="#FF6BA3"/>
           </linearGradient>
         </defs>
-        <g stroke="#1D2130" stroke-width="1">
+        <g stroke="#262B40" stroke-width="1">
           <line x1="0" y1="37" x2="600" y2="37"/><line x1="0" y1="75" x2="600" y2="75"/>
           <line x1="0" y1="112" x2="600" y2="112"/>
           <line x1="150" y1="0" x2="150" y2="150"/><line x1="300" y1="0" x2="300" y2="150"/>
@@ -71,28 +72,32 @@
 
     <div class="steps">
       <div class="step">
-        <span class="n">Start here</span>
-        <h3>Type a sentence</h3>
-        <p>Go to <b>Predict</b> and enter any sentence with an opinion in it — a product review
-          works well. Both models read it, but only one answer comes back to you.</p>
+        <span class="n">Step 1 · Predict tab</span>
+        <h3>Send a sentence</h3>
+        <p>Press <b>Surprise me</b> for a random sentence, or type your own, then press
+          <b>Classify</b>. A large <b>POSITIVE</b> or <b>NEGATIVE</b> appears below the box — that is
+          the answer, and the small print under it says which model produced it.</p>
       </div>
       <div class="step">
-        <span class="n">Then</span>
+        <span class="n">Step 2 · Comparison tab</span>
         <h3>See if they agree</h3>
-        <p><b>Comparison</b> shows how far apart the two models were on everything you have sent.
-          They should be almost identical. If they are not, v2 is not safe to ship.</p>
+        <p>Look at the first number, <b>Average gap</b>. That is how far apart the two models were —
+          near <b>0</b> means they agree. Then look at the chart below it: every dot is one sentence,
+          and a <b>pink</b> dot is one where they gave opposite answers.</p>
       </div>
       <div class="step">
-        <span class="n">Then</span>
-        <h3>Give v2 some traffic</h3>
-        <p>On <b>Rollout</b>, press Promote. That hands v2 5% of requests, then 25%, 50%, and
-          finally all of them — one careful step at a time.</p>
+        <span class="n">Step 3 · Rollout tab</span>
+        <h3>Give the new model traffic</h3>
+        <p>Press <b>Promote</b>. Watch the <b>Traffic split</b> bar fill with the new model's colour,
+          and the row of stages at the top of this page move along: Shadow → Canary 5 → 25 → 50 →
+          Full.</p>
       </div>
       <div class="step">
-        <span class="n">Any time</span>
+        <span class="n">Any time · Rollout tab</span>
         <h3>Pull it back</h3>
-        <p>Press Roll back and every request instantly returns to the old model. <b>Audit</b>
-          records what the numbers looked like at the moment you decided.</p>
+        <p>Press <b>Roll back</b>. The stage row goes dim with a red line struck through it and every
+          request returns to the old model instantly. The <b>Audit</b> tab then shows what the numbers
+          were at the moment you decided.</p>
       </div>
     </div>
 
@@ -143,11 +148,11 @@
   <!-- ══════════════ PREDICT ══════════════ -->
   <section class="view on" id="view-predict" role="tabpanel">
     <p class="explain">
-      Type a sentence and both models read it. Which one actually answers you depends on the rollout
-      stage above — in <b>Shadow</b> the old model always answers while the new one works silently in
-      the background, and from <b>Canary 5</b> onward the new model starts answering a share of
-      requests for real. Sending the same sentence twice returns a stored answer instantly instead of
-      running the model again.
+      Type a sentence — or press <b>Surprise me</b> for a random one — and both models read it. Which
+      one actually answers you depends on the rollout stage above: in <b>Shadow</b> the old model
+      always answers while the new one works silently in the background, and from <b>Canary 5</b>
+      onward the new model starts answering a share of requests for real. Sending the same sentence
+      twice returns a stored answer instantly instead of running the model again.
     </p>
 
     <div class="grid-wide">
@@ -156,16 +161,21 @@
           <button class="q" data-tip="Sentiment analysis: the model reads a sentence and decides whether the opinion in it is positive or negative, with a confidence score.">?</button>
         </h2>
         <textarea id="predictText" rows="3" spellcheck="false">The battery died after two days and support never replied.</textarea>
+
+        <p class="samples-lab">Don't feel like typing? Press Surprise me below, or pick a kind
+          <button class="q" data-tip="Each button drops a random sentence of that kind into the box. They are drawn from reviews, complaints, films, restaurants, support tickets and social posts — not just product reviews — so you can see how the models handle very different writing.">?</button>
+        </p>
         <div class="samples" id="samples">
-          <button data-t="The battery died after two days and support never replied.">clearly negative</button>
-          <button data-t="Absolutely brilliant — better than I expected for the price.">clearly positive</button>
-          <button data-t="It works, I suppose, though I would not buy it again.">borderline</button>
-          <button data-t="Not bad at all, honestly.">tricky wording</button>
+          <button data-kind="negative">Clearly negative</button>
+          <button data-kind="positive">Clearly positive</button>
+          <button data-kind="mixed">Mixed feelings</button>
+          <button data-kind="tricky">Sarcasm &amp; understatement</button>
         </div>
+
         <div class="keys">
           <button class="key prime" id="btnPredict">Classify</button>
-          <button class="key quiet" id="btnPredictAgain">Send the same again
-          </button>
+          <button class="key dice" id="btnRandom">🎲 Surprise me</button>
+          <button class="key quiet" id="btnPredictAgain">Send the same again</button>
           <button class="q" data-tip="Sends the identical sentence a second time. The answer comes back from the cache in well under a millisecond, without running the model at all.">?</button>
         </div>
         <div id="predictResult"></div>
@@ -249,9 +259,10 @@
              aria-label="Confidence gap between the two models, one point per comparison"></svg>
       </div>
       <div class="legend">
-        <span><i style="background:#00E5C7"></i>confidence gap</span>
-        <span><i class="dot" style="background:#FF4D8D"></i>the models disagreed</span>
-        <span><i style="background:#7B8199"></i>average gap</span>
+        <span><i style="background:linear-gradient(90deg,#22F0D4,#9B82FF)"></i>confidence gap</span>
+        <span><i class="dot" style="background:#22F0D4"></i>the models agreed</span>
+        <span><i class="dot" style="background:#FF6BA3"></i>the models disagreed</span>
+        <span><i style="background:#A7AECB"></i>average gap</span>
       </div>
     </div>
 
@@ -344,8 +355,8 @@
     <span class="model-tag">Running for <b id="uptime">—</b></span>
     <span class="model-tag">Updated <b id="lastRefresh">—</b></span>
     <span class="lamps">
-      <button class="key quiet" id="btnRefresh" style="padding:8px 18px">Refresh</button>
-      <button class="key quiet" id="btnLive" style="padding:8px 18px">Live: off</button>
+      <button class="key quiet" id="btnRefresh" style="padding:10px 20px">Refresh</button>
+      <button class="key quiet" id="btnLive" style="padding:10px 20px">Live: off</button>
       <a class="model-tag" href="/docs" style="align-self:center">API docs →</a>
     </span>
   </div>
