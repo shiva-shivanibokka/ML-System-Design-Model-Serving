@@ -759,6 +759,66 @@ function fmtTime(ts) {
   return isNaN(d) ? ts : d.toLocaleTimeString();
 }
 
+/* ───────────────────────── tooltips ───────────────────────── */
+
+/*
+ * Delegated, so tooltips work on the readouts and list rows that are rebuilt
+ * from scratch on every refresh — per-element listeners would be lost each time.
+ * Placed above the button when there is room and below when there is not, and
+ * always clamped inside the viewport.
+ */
+const tipEl = document.createElement("div");
+tipEl.className = "tip";
+tipEl.hidden = true;
+document.body.appendChild(tipEl);
+
+function showTip(btn) {
+  const text = btn.dataset.tip;
+  if (!text) return;
+  tipEl.textContent = text;
+  tipEl.hidden = false;
+
+  const b = btn.getBoundingClientRect();
+  const t = tipEl.getBoundingClientRect();
+  const M = 12;
+
+  const left = Math.min(
+    Math.max(M, b.left + b.width / 2 - t.width / 2),
+    window.innerWidth - t.width - M
+  );
+  // Above by preference; below when the button sits too near the top.
+  const above = b.top - t.height - 10;
+  const top = above >= M ? above : b.bottom + 10;
+
+  tipEl.style.left = `${Math.round(left)}px`;
+  tipEl.style.top = `${Math.round(top)}px`;
+}
+
+const hideTip = () => {
+  tipEl.hidden = true;
+};
+
+document.addEventListener("mouseover", (ev) => {
+  const btn = ev.target.closest?.(".q[data-tip]");
+  if (btn) showTip(btn);
+  else if (!tipEl.hidden) hideTip();
+});
+
+document.addEventListener("focusin", (ev) => {
+  const btn = ev.target.closest?.(".q[data-tip]");
+  if (btn) showTip(btn);
+});
+
+document.addEventListener("focusout", hideTip);
+window.addEventListener("scroll", hideTip, { passive: true });
+window.addEventListener("resize", hideTip);
+
+// A tap on a phone fires no mouseover, and focus alone does not always follow.
+document.addEventListener("click", (ev) => {
+  const btn = ev.target.closest?.(".q[data-tip]");
+  if (btn) showTip(btn);
+});
+
 /* ───────────────────────── wiring ───────────────────────── */
 
 // Manual and Predict have nothing to fetch: one is static text, the other only

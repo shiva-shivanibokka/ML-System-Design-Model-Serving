@@ -443,19 +443,23 @@ a { color: var(--traffic); }
   outline: none;
 }
 
-.q::after {
-  content: attr(data-tip);
-  /* display:none rather than visibility:hidden. A hidden-but-laid-out tooltip
-   * still occupies space, so a 320px bubble anchored near the right edge
-   * extended the page's scrollable width and made the whole layout scroll
-   * sideways on a phone — from tooltips nobody could even see. */
-  display: none;
-  position: absolute;
-  bottom: calc(100% + 9px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: min(380px, calc(100vw - 32px));
+/*
+ * One shared tooltip element, positioned in JS and fixed to the viewport.
+ *
+ * It used to be a ::after on each button, which failed twice over. Any ancestor
+ * with overflow:hidden — every readout card had one — clipped it to nothing, so
+ * the button highlighted on hover and no tooltip ever appeared. And a bubble
+ * centred on a button near the left edge simply rendered off-screen, where
+ * nothing can clamp it, because negative overflow is not scrollable.
+ *
+ * A single fixed-position node escapes every clipping ancestor and can be
+ * clamped to the viewport arithmetically, which is the only way to place it
+ * correctly at both 1600px and 390px.
+ */
+.tip {
+  position: fixed;
+  z-index: 60;
+  max-width: min(380px, calc(100vw - 24px));
   background: linear-gradient(160deg, #232941, #171B2B);
   border: 1px solid var(--rule-hi);
   border-radius: 10px;
@@ -464,20 +468,14 @@ a { color: var(--traffic); }
   line-height: 1.6;
   letter-spacing: 0;
   text-transform: none;
+  font-weight: 400;
   color: var(--text);
   text-align: left;
-  white-space: normal;
-  z-index: 30;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(34, 240, 212, 0.12);
   pointer-events: none;
 }
 
-/* :focus as well as :focus-visible — a tap on a phone focuses the button but
- * does not match :focus-visible, so touch users got no tooltip at all. */
-.q:hover::after, .q:focus::after, .q:focus-visible::after { display: block; }
-
-/* Tooltips near the right edge would otherwise overflow the viewport. */
-.q.tip-left::after { left: auto; right: 0; transform: none; }
+.tip[hidden] { display: none; }
 
 /* ───────────────────────── readouts ───────────────────────── */
 
