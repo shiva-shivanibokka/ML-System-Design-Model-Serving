@@ -1,0 +1,596 @@
+/*
+ * Amber phosphor control panel.
+ *
+ * One typeface (monospace) throughout: hierarchy comes from size, spacing and
+ * intensity rather than from a second family. That is both truer to the CRT
+ * this borrows from and immune to webfont fallback, since nothing is loaded
+ * over the network — the CSP on a scale-to-zero container should never be
+ * waiting on a font CDN to paint a control surface.
+ *
+ * Colour is rationed deliberately:
+ *   --amber      live values, the thing you are reading
+ *   --amber-dim  graticule, secondary trace, anything inactive
+ *   --cream      operator input and headline figures
+ *   --alarm      a breached threshold, and nothing else
+ *   --ok         a cleared threshold, and nothing else
+ * Structural chrome stays in warm greys so the amber never becomes a wash.
+ */
+
+:root {
+  --gnd: #080705;
+  --chrome: #100E0A;
+  --panel: #0D0B08;
+  --raise: #16130D;
+  --rule: #241D12;
+  --rule-hi: #33280F;
+
+  --amber: #F0A22E;
+  --amber-dim: #7E5715;
+  --cream: #F6E9CD;
+  --dim: #8A7A5E;
+  --alarm: #E4533C;
+  --ok: #9CBF6E;
+
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --bloom: 0 0 12px rgba(240, 162, 46, 0.28);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--gnd);
+  color: var(--cream);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The faint vignette a phosphor tube has. Purely atmosphere, and cheap. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    rgba(240, 162, 46, 0.035) 0%,
+    rgba(0, 0, 0, 0) 68%
+  );
+  z-index: 0;
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 0 0 40px;
+}
+
+a { color: var(--amber); }
+
+/* ───────────────────────── chrome bar ───────────────────────── */
+
+.chrome {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 13px 22px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--rule);
+}
+
+.wordmark {
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--amber);
+  text-shadow: var(--bloom);
+}
+
+.model-tag {
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.lamps { margin-left: auto; display: flex; gap: 18px; flex-wrap: wrap; }
+
+.lamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.lamp i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rule-hi);
+  flex: 0 0 8px;
+}
+
+.lamp.on i { background: var(--ok); box-shadow: 0 0 8px rgba(156, 191, 110, 0.55); }
+.lamp.hot i { background: var(--amber); box-shadow: var(--bloom); }
+.lamp.fault i { background: var(--alarm); box-shadow: 0 0 8px rgba(228, 83, 60, 0.6); }
+.lamp b { color: var(--cream); font-weight: 400; }
+
+/* ───────────────────────── stage lane ───────────────────────── */
+
+.lane-wrap {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--panel);
+}
+
+.lane-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 9px;
+  flex-wrap: wrap;
+}
+
+.lane-head .k {
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.lane-head .pos { font-size: 11px; color: var(--amber); letter-spacing: 0.1em; }
+
+.stage-lane { display: flex; gap: 2px; }
+
+.stage-lane .step {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 8px;
+  background: var(--raise);
+  border: 1px solid var(--rule);
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-lane .step.done { color: var(--amber-dim); border-color: var(--rule-hi); }
+
+.stage-lane .step.now {
+  color: var(--gnd);
+  background: var(--amber);
+  border-color: var(--amber);
+  text-shadow: none;
+}
+
+/* rolled_back is not a position on the lane, so no step lights up. Striking
+ * the whole lane through says "this progression was abandoned" rather than
+ * leaving a row of dead cells that reads as a rendering failure. */
+.stage-lane.aborted { position: relative; opacity: 0.55; }
+
+.stage-lane.aborted::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--alarm);
+}
+
+/* ───────────────────────── tabs ───────────────────────── */
+
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--rule);
+  background: var(--chrome);
+  overflow-x: auto;
+}
+
+.tabs button {
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 13px 20px;
+  color: var(--dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tabs button:hover { color: var(--cream); }
+.tabs button:focus-visible { outline: 1px solid var(--amber); outline-offset: -3px; }
+.tabs button.on { color: var(--amber); border-bottom-color: var(--amber); }
+
+/* ───────────────────────── panels ───────────────────────── */
+
+.view { display: none; padding: 22px; }
+.view.on { display: block; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.grid-wide { display: grid; grid-template-columns: 1.35fr 0.65fr; gap: 18px; }
+
+@media (max-width: 880px) {
+  .grid2, .grid3, .grid-wide { grid-template-columns: 1fr; }
+}
+
+.block {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  padding: 16px 18px;
+}
+
+.block h2 {
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 0 0 14px;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.block h2::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.explain {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--dim);
+  border-left: 2px solid var(--rule-hi);
+  padding: 2px 0 2px 12px;
+  margin: 0 0 16px;
+  max-width: 76ch;
+}
+
+.explain b { color: var(--amber-dim); font-weight: 400; }
+
+/* readouts */
+
+.readouts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--rule); }
+
+@media (max-width: 720px) { .readouts { grid-template-columns: repeat(2, 1fr); } }
+
+.ro { background: var(--panel); padding: 13px 15px; }
+.ro .k { font-size: 9.5px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--dim); }
+.ro .v {
+  font-size: 26px;
+  margin-top: 8px;
+  color: var(--amber);
+  letter-spacing: -0.01em;
+  text-shadow: var(--bloom);
+}
+.ro .v small { font-size: 12px; color: var(--dim); text-shadow: none; letter-spacing: 0.06em; }
+.ro .v.alarm { color: var(--alarm); text-shadow: 0 0 12px rgba(228, 83, 60, 0.3); }
+.ro .v.ok { color: var(--ok); text-shadow: 0 0 12px rgba(156, 191, 110, 0.25); }
+.ro .v.plain { color: var(--cream); text-shadow: none; }
+.ro .d { font-size: 10px; color: var(--dim); margin-top: 6px; letter-spacing: 0.05em; }
+
+/* scope */
+
+.scope {
+  border: 1px solid var(--rule-hi);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(240, 162, 46, 0.05) 0%,
+    rgba(0, 0, 0, 0) 72%
+  );
+  position: relative;
+  /* The corner labels live in this padding rather than over the trace. A
+   * signal near zero sits at the bottom of the plot, which is exactly where
+   * the lower labels would otherwise be. */
+  padding: 22px 12px 24px;
+}
+
+.scope-corner {
+  position: absolute;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--amber-dim);
+  pointer-events: none;
+}
+
+.scope-corner.tl { top: 6px; left: 12px; }
+.scope-corner.tr { top: 6px; right: 12px; }
+.scope-corner.bl { bottom: 6px; left: 12px; }
+.scope-corner.br { bottom: 6px; right: 12px; }
+
+.scope svg { display: block; width: 100%; height: auto; }
+
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px; font-size: 10px; color: var(--dim); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; letter-spacing: 0.08em; }
+.legend i { width: 15px; height: 2px; display: inline-block; }
+
+/* tables */
+
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+
+th {
+  font-size: 9.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: left;
+  font-weight: 400;
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--rule-hi);
+}
+
+th.n, td.n { text-align: right; }
+td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--rule); color: var(--cream); }
+td.k { color: var(--dim); }
+tr:last-child td { border-bottom: 0; }
+
+.flag {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border: 1px solid currentColor;
+}
+
+.flag.ok { color: var(--ok); }
+.flag.watch { color: var(--amber); }
+.flag.alarm { color: var(--alarm); }
+
+/* meters */
+
+.meter { display: grid; gap: 10px; }
+
+.meter-row {
+  display: grid;
+  grid-template-columns: 108px 1fr 66px;
+  align-items: center;
+  gap: 12px;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+}
+
+.meter-row .lab { color: var(--dim); text-transform: uppercase; }
+.meter-row .track { height: 12px; background: var(--raise); border: 1px solid var(--rule); }
+.meter-row .track i { display: block; height: 100%; background: var(--amber); }
+.meter-row .track i.ok { background: var(--ok); }
+.meter-row .track i.alarm { background: var(--alarm); }
+.meter-row .n { text-align: right; color: var(--cream); }
+
+/* split bar */
+
+.split {
+  display: flex;
+  height: 30px;
+  border: 1px solid var(--rule-hi);
+  overflow: hidden;
+}
+
+.split i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.split .a { background: rgba(126, 87, 21, 0.32); color: var(--cream); }
+.split .b { background: rgba(240, 162, 46, 0.85); color: var(--gnd); }
+
+.split-caption {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+
+/* controls */
+
+.keys { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+
+button.key {
+  font-family: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 11px 22px;
+  border: 1px solid var(--amber);
+  background: transparent;
+  color: var(--amber);
+  cursor: pointer;
+}
+
+button.key:hover { background: rgba(240, 162, 46, 0.12); }
+button.key:focus-visible { outline: 1px solid var(--cream); outline-offset: 2px; }
+button.key.prime { background: var(--amber); color: var(--gnd); }
+button.key.prime:hover { background: #FFB544; }
+button.key.stop { border-color: var(--alarm); color: var(--alarm); }
+button.key.stop:hover { background: rgba(228, 83, 60, 0.12); }
+button.key.quiet { border-color: var(--rule-hi); color: var(--dim); }
+button.key.quiet:hover { background: var(--raise); color: var(--cream); }
+button.key[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+.keys .stamp { margin-left: auto; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); }
+
+textarea, input[type="text"] {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 12px 13px;
+  background: var(--gnd);
+  border: 1px solid var(--rule-hi);
+  color: var(--cream);
+  resize: vertical;
+}
+
+textarea:focus, input:focus { outline: 1px solid var(--amber); border-color: var(--amber); }
+
+.samples { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+.samples button {
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 6px 11px;
+  background: var(--raise);
+  border: 1px solid var(--rule-hi);
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.samples button:hover { color: var(--amber); border-color: var(--amber-dim); }
+
+/* prediction result */
+
+.result { border: 1px solid var(--rule-hi); background: var(--gnd); padding: 16px 18px; margin-top: 16px; }
+.result .label { font-size: 34px; letter-spacing: 0.06em; color: var(--amber); text-shadow: var(--bloom); }
+.result .label.neg { color: var(--alarm); text-shadow: 0 0 14px rgba(228, 83, 60, 0.3); }
+.result .score { font-size: 13px; color: var(--dim); margin-top: 4px; letter-spacing: 0.08em; }
+.result .conf { height: 6px; background: var(--raise); margin: 14px 0 12px; border: 1px solid var(--rule); }
+.result .conf i { display: block; height: 100%; background: var(--amber); }
+.result .meta { font-size: 10.5px; color: var(--dim); letter-spacing: 0.07em; display: flex; gap: 16px; flex-wrap: wrap; }
+.result .meta b { color: var(--cream); font-weight: 400; }
+
+/* lists */
+
+.list { display: grid; gap: 1px; background: var(--rule); border: 1px solid var(--rule); max-height: 340px; overflow-y: auto; }
+.list .item { background: var(--panel); padding: 11px 14px; font-size: 11.5px; }
+.list .item .top { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.list .item time { color: var(--amber-dim); font-size: 10.5px; letter-spacing: 0.06em; }
+.list .item .trig { color: var(--amber); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; }
+.list .item .arrow { color: var(--cream); }
+.list .item .note { color: var(--dim); font-size: 10.5px; margin-top: 4px; }
+.list .item .txt { color: var(--cream); margin-top: 5px; line-height: 1.55; }
+
+.empty { color: var(--dim); font-size: 11.5px; padding: 18px 0; letter-spacing: 0.05em; }
+
+/* hazard banner */
+
+.hazard {
+  padding: 11px 22px;
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--amber);
+  border-top: 1px solid var(--rule);
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(240, 162, 46, 0.10) 0 8px,
+    rgba(240, 162, 46, 0.03) 8px 16px
+  );
+}
+
+/* toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  background: var(--chrome);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  padding: 11px 20px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  z-index: 40;
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+}
+
+.toast.bad { border-color: var(--alarm); color: var(--alarm); }
+
+/* ───────────────────────── boot overlay ───────────────────────── */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--gnd);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.boot-inner { width: min(620px, 100%); }
+
+.boot .title {
+  font-size: 13px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--amber);
+  text-shadow: var(--bloom);
+  margin-bottom: 18px;
+}
+
+.boot .frame {
+  border: 1px solid var(--rule-hi);
+  background: radial-gradient(ellipse at center, rgba(240, 162, 46, 0.05) 0%, rgba(0, 0, 0, 0) 72%);
+  padding: 0;
+}
+
+.boot svg { display: block; width: 100%; height: auto; }
+
+.boot .sweep {
+  stroke-dasharray: 240 1200;
+  animation: sweep 2.4s linear infinite;
+}
+
+@keyframes sweep {
+  from { stroke-dashoffset: 1440; }
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot .sweep { animation: none; stroke-dasharray: none; opacity: 0.7; }
+}
+
+.boot .stage-text {
+  margin-top: 18px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--cream);
+}
+
+.boot .stage-sub { margin-top: 7px; font-size: 10.5px; letter-spacing: 0.1em; color: var(--dim); }
+.boot .stage-text.failed { color: var(--alarm); }
+
+.boot .steps { display: flex; gap: 2px; margin-top: 16px; }
+
+.boot .steps i {
+  flex: 1;
+  height: 4px;
+  background: var(--rule);
+}
+
+.boot .steps i.done { background: var(--amber-dim); }
+.boot .steps i.now { background: var(--amber); box-shadow: var(--bloom); }

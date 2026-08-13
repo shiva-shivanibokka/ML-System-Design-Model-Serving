@@ -3,7 +3,7 @@
 # =============================================================================
 # Services:
 #   gateway    — FastAPI inference API (port 8000)
-#   gradio     — Deployment control panel UI (port 7860)
+#   (the control panel is served by the gateway itself at /ui)
 #   redis      — Prediction cache (port 6379)
 #   postgres   — Audit log persistence (port 5432)
 #   prometheus — Metrics scraping (port 9090)
@@ -109,10 +109,9 @@ services:
       POSTGRES_PASSWORD: postgres
       GATEWAY_URL: http://gateway:8000
       PYTHONPATH: /app
-      # Compose runs the control panel as its own service on 7860, so the
-      # gateway does not also mount a copy. The single-container deployment
-      # leaves this at its default of 1.
-      MOUNT_UI: "0"
+      # The control panel is static files served out of this same process at
+      # /ui. Set to "0" to run the API alone.
+      MOUNT_UI: "1"
     volumes:
       - hf-cache:/app/.cache/huggingface
       - deployment-state:/app/data
@@ -129,27 +128,6 @@ services:
       timeout: 10s
       start_period: 120s    # Give time for model download + warm-up
       retries: 3
-
-  # ── Gradio Control Panel ────────────────────────────────────────────────────
-  gradio:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ms_gradio
-    restart: unless-stopped
-    command: python gradio_app/app.py
-    ports:
-      - "7860:7860"
-    environment:
-      GATEWAY_URL: http://gateway:8000
-      GRADIO_HOST: "0.0.0.0"
-      GRADIO_PORT: "7860"
-      PYTHONPATH: /app
-    depends_on:
-      gateway:
-        condition: service_healthy
-    networks:
-      - serving-net
 
   # ── Prometheus ──────────────────────────────────────────────────────────────
   prometheus:

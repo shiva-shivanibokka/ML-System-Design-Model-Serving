@@ -39,6 +39,7 @@ import os
 import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 import structlog
@@ -722,40 +723,36 @@ async def cb_reset() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Gradio control panel (same process, same port)
+# Control panel (same process, same port)
 # ---------------------------------------------------------------------------
-# The dashboard already exists and already talks to this API over HTTP, so it
-# needs no rewrite to be hosted — only somewhere to run. Mounting it into this
-# app makes the whole demo one container behind one URL: no second service to
-# deploy, no CORS, no cross-origin URL to keep in sync, and nothing extra that
-# can expire. GATEWAY_URL already defaults to localhost:8000, which is correct
-# once the two share a process.
+# The panel is a static page that talks to this API over HTTP, mounted into
+# this app so the whole demo is one container behind one URL: no second
+# service to deploy, no CORS, no cross-origin URL to keep in sync, and nothing
+# extra that can expire.
 #
-# Router inference runs in an executor (deployment/router.py), so the UI's
-# loopback calls never contend with the event loop that serves them.
+# It replaced a Gradio app, which is why MOUNT_UI still exists — compose runs
+# the API without a panel, and API-only remains a valid way to run this.
+#
+# StaticFiles(html=True) serves index.html for "/ui/" itself. Assets are
+# referenced relatively from that page, so nothing is emitted root-absolute
+# and there is no redirect layer to maintain.
 if os.getenv("MOUNT_UI", "1") == "1":
     try:
-        import gradio as gr
         from fastapi.responses import RedirectResponse
+        from fastapi.staticfiles import StaticFiles
 
-        from gradio_app.app import build_app as build_ui
+        _web_dir = Path(__file__).resolve().parent.parent / "web"
+        if not (_web_dir / "index.html").exists():
+            raise FileNotFoundError(f"no index.html under {_web_dir}")
 
-        app = gr.mount_gradio_app(app, build_ui(), path="/ui")
+        app.mount("/ui", StaticFiles(directory=str(_web_dir), html=True), name="ui")
 
         @app.get("/", include_in_schema=False)
         async def _root() -> RedirectResponse:
-            return RedirectResponse(url="/ui")
+            return RedirectResponse(url="/ui/")
 
-        # Gradio emits its CSS preload hints root-absolute (/assets/...) even
-        # when mounted on a subpath, so each page load logged a 404 for a file
-        # that also loads correctly from /ui/assets/. Harmless to rendering,
-        # but a console error on every visit is not something to ship.
-        @app.get("/assets/{path:path}", include_in_schema=False)
-        async def _assets(path: str) -> RedirectResponse:
-            return RedirectResponse(url=f"/ui/assets/{path}")
-
-        log.info("ui_mounted", path="/ui")
+        log.info("ui_mounted", path="/ui", directory=str(_web_dir))
     except Exception as e:
-        # API-only is a valid way to run this; a missing UI must not take the
-        # service down with it.
+        # API-only is a valid way to run this; a missing panel must not take
+        # the service down with it.
         log.warning("ui_mount_failed", error=str(e), fallback="api_only")

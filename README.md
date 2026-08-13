@@ -121,8 +121,8 @@ It's the most common real-world "v2" scenario: same model architecture, differen
 | Structured logging | structlog (JSON, trace_id-bound) |
 | Database | PostgreSQL (audit log persistence) |
 | Load testing | Locust (canary-aware per-version latency breakdown) |
-| Containerization | Docker + docker-compose (6 services) |
-| Demo UI | Gradio (6-tab deployment control panel) |
+| Containerization | Docker + docker-compose (5 services) |
+| Control panel | Static HTML/CSS/JS, no build step, served by FastAPI at `/ui` |
 
 ---
 
@@ -149,7 +149,7 @@ docker-compose up --build
 | Service | URL |
 |---|---|
 | FastAPI docs (OpenAPI) | http://localhost:8000/docs |
-| Gradio control panel | http://localhost:7860 |
+| Control panel | http://localhost:8000/ui/ |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 (admin / admin) |
 
@@ -198,7 +198,7 @@ docker run --rm --network host \
 
 ### Step 1: Start in Shadow Mode (default)
 
-The system starts in `shadow` state. v2 runs on every request but results are never returned to users. Watch the disagreement rate build up in the Gradio UI or via:
+The system starts in `shadow` state. v2 runs on every request but results are never returned to users. Watch the disagreement rate build up on the Disagreement tab of the control panel, or via:
 
 ```bash
 curl http://localhost:8000/monitoring/disagreement

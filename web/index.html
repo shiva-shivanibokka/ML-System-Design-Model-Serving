@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Serving — Shadow Deployment Console</title>
+<meta name="description" content="Control panel for a shadow-deployment model serving system: canary rollout, v1/v2 disagreement monitoring, drift detection and circuit breaking.">
+<link rel="stylesheet" href="styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23080705'/><path d='M2 10 L5 10 L6 5 L8 13 L10 8 L14 8' stroke='%23F0A22E' fill='none' stroke-width='1.4'/></svg>">
+</head>
+<body>
+
+<!-- ══════════════ boot / cold-start overlay ══════════════ -->
+<div class="boot" id="boot">
+  <div class="boot-inner">
+    <div class="title">Model Serving · Power-on Self Test</div>
+    <div class="frame">
+      <svg viewBox="0 0 600 150" preserveAspectRatio="none" aria-hidden="true">
+        <g stroke="#241D12" stroke-width="1">
+          <line x1="0" y1="37" x2="600" y2="37"/><line x1="0" y1="75" x2="600" y2="75"/>
+          <line x1="0" y1="112" x2="600" y2="112"/>
+          <line x1="150" y1="0" x2="150" y2="150"/><line x1="300" y1="0" x2="300" y2="150"/>
+          <line x1="450" y1="0" x2="450" y2="150"/>
+        </g>
+        <path class="sweep" fill="none" stroke="#F0A22E" stroke-width="1.8"
+              d="M0,75 L60,75 L80,42 L100,108 L120,75 L200,75 L220,54 L240,96 L260,75 L360,75
+                 L380,38 L400,112 L420,75 L500,75 L520,60 L540,90 L560,75 L600,75"/>
+      </svg>
+    </div>
+    <div class="stage-text" id="bootStage">Contacting service…</div>
+    <div class="stage-sub" id="bootSub">
+      This service scales to zero, so the first request of the day wakes it up.
+      Two transformers load and warm up before it will serve traffic — about 70 seconds.
+    </div>
+    <div class="steps" id="bootSteps">
+      <i data-stage="loading_v1"></i><i data-stage="warming_v1"></i>
+      <i data-stage="loading_v2"></i><i data-stage="warming_v2"></i><i data-stage="ready"></i>
+    </div>
+  </div>
+</div>
+
+<div class="shell" id="shell" hidden>
+
+  <!-- ══════════════ chrome ══════════════ -->
+  <div class="chrome">
+    <span class="wordmark">Model Serving</span>
+    <span class="model-tag">DistilBERT SST-2 · v1 fp32 / v2 int8</span>
+    <span class="lamps">
+      <span class="lamp on" id="lampReady"><i></i>Ready</span>
+      <span class="lamp" id="lampState"><i></i><b id="lampStateText">—</b></span>
+      <span class="lamp" id="lampBreaker"><i></i>Breaker <b id="lampBreakerText">—</b></span>
+      <span class="lamp" id="lampCache"><i></i>Cache <b id="lampCacheText">—</b></span>
+    </span>
+  </div>
+
+  <!-- ══════════════ stage lane (always visible) ══════════════ -->
+  <div class="lane-wrap">
+    <div class="lane-head">
+      <span class="k">Rollout position</span>
+      <span class="pos" id="lanePos">—</span>
+    </div>
+    <div class="stage-lane" id="stageLane">
+      <div class="step" data-state="shadow">Shadow</div>
+      <div class="step" data-state="canary_5">Canary 5</div>
+      <div class="step" data-state="canary_25">Canary 25</div>
+      <div class="step" data-state="canary_50">Canary 50</div>
+      <div class="step" data-state="full">Full</div>
+    </div>
+  </div>
+
+  <!-- ══════════════ tabs ══════════════ -->
+  <nav class="tabs" id="tabs" role="tablist">
+    <button class="on" data-view="predict" role="tab">Predict</button>
+    <button data-view="rollout" role="tab">Rollout</button>
+    <button data-view="disagreement" role="tab">Disagreement</button>
+    <button data-view="drift" role="tab">Drift</button>
+    <button data-view="cache" role="tab">Cache</button>
+    <button data-view="audit" role="tab">Audit</button>
+  </nav>
+
+  <!-- ══════════════ PREDICT ══════════════ -->
+  <section class="view on" id="view-predict" role="tabpanel">
+    <div class="grid-wide">
+      <div class="block">
+        <h2>Classify text</h2>
+        <p class="explain">
+          The router decides which model answers. In <b>shadow</b> every request is served by v1
+          while v2 also runs and its answer is recorded but never returned. From <b>canary 5</b>
+          onward a share of requests is genuinely served by v2. Identical text is cached, so a
+          repeat of the same input returns in well under a millisecond.
+        </p>
+        <textarea id="predictText" rows="3" spellcheck="false">The battery died after two days and support never replied.</textarea>
+        <div class="samples" id="samples">
+          <button data-t="The battery died after two days and support never replied.">negative · clear</button>
+          <button data-t="Absolutely brilliant — better than I expected for the price.">positive · clear</button>
+          <button data-t="It works, I suppose, though I would not buy it again.">borderline</button>
+          <button data-t="Not bad at all, honestly.">double negative</button>
+        </div>
+        <div class="keys">
+          <button class="key prime" id="btnPredict">Classify</button>
+          <button class="key quiet" id="btnPredictAgain">Repeat (cache test)</button>
+        </div>
+        <div id="predictResult"></div>
+      </div>
+
+      <div class="block">
+        <h2>What just happened</h2>
+        <p class="explain">
+          Every field the API returns, unedited. <b>model_used</b> is which model actually answered;
+          <b>cache_hit</b> tells you whether inference ran at all.
+        </p>
+        <table id="predictDetail">
+          <tbody><tr><td class="k">No prediction yet</td><td class="n">—</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ ROLLOUT ══════════════ -->
+  <section class="view" id="view-rollout" role="tabpanel">
+    <p class="explain">
+      A canary rollout gives a new model a small share of live traffic, watches it against fixed
+      thresholds, and either advances it or pulls it back. Promotion here is manual. Any breached
+      threshold triggers an automatic rollback to <b>shadow</b> and flushes the cache, so no answer
+      produced by the suspect model can be served again from memory.
+    </p>
+
+    <div class="readouts" id="rolloutReadouts"></div>
+
+    <div class="grid-wide" style="margin-top:18px">
+      <div class="block">
+        <h2>Traffic split</h2>
+        <div class="split" id="splitBar"></div>
+        <p class="split-caption" id="splitCaption">—</p>
+        <p class="explain" style="margin-top:16px">
+          Promotion is one step at a time: <b>shadow → canary 5 → 25 → 50 → full</b>. Rolling back
+          skips straight out of the progression and flushes the cache, because an answer produced by
+          a model you have just stopped trusting should not be served again from memory.
+        </p>
+        <div class="keys">
+          <button class="key prime" id="btnPromote">Promote</button>
+          <button class="key stop" id="btnRollback">Roll back</button>
+          <button class="key quiet" id="btnResetBreaker">Reset breaker</button>
+          <span class="stamp" id="durabilityStamp">—</span>
+        </div>
+      </div>
+      <div class="block">
+        <h2>Circuit breaker</h2>
+        <p class="explain">
+          Trips after repeated v2 failures and sends everything to v1 until it is reset. It is the
+          floor under the rollout: even if a threshold is missed, a failing model stops being asked.
+        </p>
+        <table id="breakerTable"><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="block" style="margin-top:18px">
+      <h2>Measured against thresholds</h2>
+      <table id="thresholdTable">
+        <thead><tr><th>Parameter</th><th class="n">Measured</th><th class="n">Limit</th><th class="n">Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══════════════ DISAGREEMENT ══════════════ -->
+  <section class="view" id="view-disagreement" role="tabpanel">
+    <p class="explain">
+      Both models score every request even when only one answer is returned, so their outputs can be
+      compared continuously. Disagreement is the most useful early signal there is: it rises before
+      accuracy visibly drops, and it needs no labels to compute. The trace below plots the confidence
+      gap on each of the most recent disagreements — a large gap means one model was confidently
+      wrong rather than both being unsure.
+    </p>
+
+    <div class="readouts" id="disagreeReadouts"></div>
+
+    <div class="block" style="margin-top:18px">
+      <h2>Confidence gap on recent disagreements</h2>
+      <div class="scope">
+        <span class="scope-corner tl">Ch1 confidence gap</span>
+        <span class="scope-corner tr" id="scopeWindow">—</span>
+        <span class="scope-corner bl">0.0 → 1.0</span>
+        <span class="scope-corner br">Trig: label mismatch</span>
+        <svg id="disagreeScope" viewBox="0 0 720 180" preserveAspectRatio="none" role="img"
+             aria-label="Confidence gap on recent disagreements"></svg>
+      </div>
+      <div class="legend">
+        <span><i style="background:#F0A22E"></i>confidence gap</span>
+        <span><i style="background:#7E5715"></i>mean gap, all requests</span>
+              </div>
+    </div>
+
+    <div class="grid2" style="margin-top:18px">
+      <div class="block">
+        <h2>Direction of disagreement</h2>
+        <table id="directionTable"><tbody></tbody></table>
+      </div>
+      <div class="block">
+        <h2>Most recent cases</h2>
+        <div class="list" id="disagreeList"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ DRIFT ══════════════ -->
+  <section class="view" id="view-drift" role="tabpanel">
+    <p class="explain">
+      Drift is the input distribution moving away from what the model was validated on. A reference
+      window is frozen at startup, and each later batch is compared against it on two
+      features: <b>input length</b> and <b>prediction confidence</b>. The score is 0 when the
+      distributions are identical and 1 when they share nothing. Evidently computes it where it is
+      installed, otherwise a Jensen-Shannon fallback does — the method used is reported below rather
+      than assumed. Nothing here looks at correctness; it only asks whether the traffic still
+      resembles what this model was measured on.
+    </p>
+
+    <div class="readouts" id="driftReadouts"></div>
+
+    <div class="grid-wide" style="margin-top:18px">
+      <div class="block">
+        <h2>Divergence per check</h2>
+        <div class="meter" id="driftMeter"></div>
+      </div>
+      <div class="block">
+        <h2>Last check</h2>
+        <table id="driftTable"><tbody></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ CACHE ══════════════ -->
+  <section class="view" id="view-cache" role="tabpanel">
+    <p class="explain">
+      Identical input text returns a stored answer instead of running inference. This deployment runs
+      a <b>single instance</b>, and one instance means one cache — so an in-process dictionary with a
+      TTL is not an approximation of Redis here, it is the same thing without the network hop or the
+      account. The backend is reported below rather than hidden, because a fallback that quietly
+      inherits the name of the thing it replaced would hide a real outage.
+    </p>
+
+    <div class="readouts" id="cacheReadouts"></div>
+
+    <div class="block" style="margin-top:18px">
+      <h2>Hit rate</h2>
+      <div class="meter" id="cacheMeter"></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ AUDIT ══════════════ -->
+  <section class="view" id="view-audit" role="tabpanel">
+    <p class="explain">
+      Every state transition, with the metrics as they stood at that moment. This is the record that
+      makes a rollback explainable after the fact — not just that the system pulled back, but what it
+      was seeing when it decided to.
+    </p>
+    <div class="block">
+      <h2>Transitions</h2>
+      <div class="list" id="auditList"></div>
+    </div>
+  </section>
+
+  <div class="hazard" id="hazard">
+    State is ephemeral — this container scales to zero, and a restart returns the machine to shadow
+  </div>
+
+  <div class="chrome" style="border-top:1px solid var(--rule);border-bottom:0">
+    <span class="model-tag">Uptime <b id="uptime">—</b></span>
+    <span class="model-tag">Refreshed <b id="lastRefresh">—</b></span>
+    <span class="lamps">
+      <button class="key quiet" id="btnRefresh" style="padding:7px 16px">Refresh</button>
+      <button class="key quiet" id="btnLive" style="padding:7px 16px">Live: off</button>
+      <a class="model-tag" href="/docs" style="align-self:center">API docs →</a>
+    </span>
+  </div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
