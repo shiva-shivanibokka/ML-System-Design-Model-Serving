@@ -125,7 +125,8 @@
         <h3>Send a sentence</h3>
         <p>Press <b>Surprise me</b> for a random sentence, or type your own, then press
           <b>Classify</b>. A large <b>POSITIVE</b> or <b>NEGATIVE</b> appears below the box — that is
-          the answer, and the small print under it says which model produced it.</p>
+          the answer, and the small print under it says which model produced it. Try
+          <b>⚠ Ones it gets wrong</b> to watch it fail confidently.</p>
       </div>
       <div class="step">
         <span class="n">Step 2 · Comparison tab</span>
@@ -230,7 +231,12 @@
       model serving live traffic. That is precisely why this system watches whether the two models
       <b>agree</b> and whether the incoming text has <b>changed shape</b>: both work without labels,
       and accuracy does not. The built-in sample sentences are the exception — those come with what
-      a person would call them, so you can catch the model being wrong.
+      a person would call them, so you can catch the model being wrong. Press
+      <b>⚠ Ones it gets wrong</b> for sentences this service was checked against and answered
+      incorrectly, most of them <b>above 99% confidence</b>. That is the uncomfortable part worth
+      sitting with: a confident answer and a correct answer are not the same thing, and every safety
+      check on this page — disagreement, drift, error rate, latency — measures something other than
+      being right, because being right is the one thing that cannot be measured without labels.
     </p>
 
     <div class="grid-wide">
@@ -242,12 +248,14 @@
 
         <p class="samples-lab">Don't feel like typing? Press Surprise me below, or pick a kind
           <button class="q" data-tip="Each button drops a random sentence of that kind into the box. They are drawn from reviews, complaints, films, restaurants, support tickets and social posts — not just product reviews — so you can see how the models handle very different writing.">?</button>
+          <button class="q" data-tip="Ones it gets wrong: 15 sentences checked against this live service and answered incorrectly, most above 99% confidence. They are hand-picked failures, not typical behaviour — this model is right far more often. They are here because confidence is not correctness, and a rollout that promotes on confident agreeing answers would sail straight past every one of them.">?</button>
         </p>
         <div class="samples" id="samples">
           <button data-kind="negative">Clearly negative</button>
           <button data-kind="positive">Clearly positive</button>
           <button data-kind="mixed">Mixed feelings</button>
           <button data-kind="tricky">Sarcasm &amp; understatement</button>
+          <button class="fails" data-kind="failing">⚠ Ones it gets wrong</button>
         </div>
 
         <div class="keys">

@@ -84,9 +84,46 @@ const SENTENCES = {
     "Sure, a two-hour queue is exactly how I wanted to spend the morning.",
     "Nothing about it is memorable, and I mean that kindly.",
   ],
+  /*
+   * Sentences this model demonstrably gets wrong, found by probing it rather
+   * than guessed: every one was checked against the live service and answered
+   * incorrectly, most above 99% confidence.
+   *
+   * They are deliberately chosen failures and the panel says so — SST-2
+   * DistilBERT is right far more often than this list implies. The point is
+   * that confidence is not correctness. A rollout that promotes on confident,
+   * agreeing answers would promote straight through every one of these.
+   */
+  failing: [
+    // Sarcasm: positive words carrying negative meaning.
+    "Perfect timing, as always.",
+    "What a lovely way to spend a Saturday: on hold.",
+    "Fantastic. The one day I need it, it breaks.",
+    "Brilliant idea, charging extra for the charger.",
+    "Wonderful, my flight is delayed for the third time today.",
+    "Thanks for nothing.",
+    "Congratulations on losing my luggage twice in one trip.",
+    // Faint praise read as praise.
+    "It is adequate.",
+    // Contrast, where the decisive clause is the second one.
+    "Lovely staff, shame about everything else.",
+    "Ugly as sin and I would buy ten more.",
+    // Negation.
+    "Not a single thing went wrong.",
+    // Good news carrying no positive words — and nothing about film reviews,
+    // which is the only kind of text this model was trained on.
+    "Unemployment fell for the third month running.",
+    "The fever broke overnight and she slept through.",
+    "It arrived three days before the date they promised.",
+    "I finished the whole book in one sitting.",
+  ],
 };
 
-const ALL_SENTENCES = Object.values(SENTENCES).flat();
+/* Surprise me draws from the ordinary sets only. Including the hand-picked
+ * failures would make the model look far worse than it is. */
+const ALL_SENTENCES = Object.entries(SENTENCES)
+  .filter(([kind]) => kind !== "failing")
+  .flatMap(([, list]) => list);
 
 /*
  * What a person would call each built-in sample.
@@ -114,6 +151,22 @@ const EXPECTED = new Map([
   ["It only broke twice, which for this brand is impressive.", "NEGATIVE"],
   ["Sure, a two-hour queue is exactly how I wanted to spend the morning.", "NEGATIVE"],
   ["Nothing about it is memorable, and I mean that kindly.", "NEGATIVE"],
+  // Every one of these was verified wrong against the live model.
+  ["Perfect timing, as always.", "NEGATIVE"],
+  ["What a lovely way to spend a Saturday: on hold.", "NEGATIVE"],
+  ["Fantastic. The one day I need it, it breaks.", "NEGATIVE"],
+  ["Brilliant idea, charging extra for the charger.", "NEGATIVE"],
+  ["Wonderful, my flight is delayed for the third time today.", "NEGATIVE"],
+  ["Thanks for nothing.", "NEGATIVE"],
+  ["Congratulations on losing my luggage twice in one trip.", "NEGATIVE"],
+  ["It is adequate.", "NEGATIVE"],
+  ["Lovely staff, shame about everything else.", "NEGATIVE"],
+  ["Ugly as sin and I would buy ten more.", "POSITIVE"],
+  ["Not a single thing went wrong.", "POSITIVE"],
+  ["Unemployment fell for the third month running.", "POSITIVE"],
+  ["The fever broke overnight and she slept through.", "POSITIVE"],
+  ["It arrived three days before the date they promised.", "POSITIVE"],
+  ["I finished the whole book in one sitting.", "POSITIVE"],
 ]);
 
 /* Never returns what is already in the box — a random button that appears to

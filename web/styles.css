@@ -736,6 +736,19 @@ textarea:focus { outline: none; border-color: var(--traffic); box-shadow: 0 0 0 
 
 .samples button:hover { color: var(--text); border-color: var(--traffic); background: rgba(34, 240, 212, 0.12); }
 
+/* The failure set is the interesting one, so it is allowed to look different. */
+.samples button.fails {
+  color: var(--alarm);
+  border-color: rgba(255, 107, 133, 0.5);
+  background: rgba(255, 107, 133, 0.1);
+}
+
+.samples button.fails:hover {
+  color: var(--text);
+  border-color: var(--alarm);
+  background: rgba(255, 107, 133, 0.22);
+}
+
 /* ───────────────────────── prediction result ───────────────────────── */
 
 .result {
