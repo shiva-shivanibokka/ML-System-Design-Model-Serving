@@ -9,9 +9,7 @@ Schema design principles:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
-
 
 # ---------------------------------------------------------------------------
 # Prediction endpoint
@@ -32,7 +30,14 @@ class PredictRequest(BaseModel):
     @field_validator("text")
     @classmethod
     def strip_text(cls, v: str) -> str:
-        return v.strip()
+        # min_length is checked before this validator runs, so "   " satisfies
+        # min_length=1 and then strips to "". Without this the model is asked
+        # to classify an empty string and the caller gets a confident answer
+        # about nothing.
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("text must contain at least one non-whitespace character")
+        return stripped
 
 
 class PredictResponse(BaseModel):
@@ -142,7 +147,7 @@ class ReadinessResponse(BaseModel):
         ...,
         description="True if model v2 has completed warm-up.",
     )
-    warmup_details: Dict[str, dict] = Field(
+    warmup_details: dict[str, dict] = Field(
         default_factory=dict,
         description="Per-model warm-up results (first vs last inference latency).",
     )
@@ -157,7 +162,7 @@ class ReadinessResponse(BaseModel):
         default=0.0,
         description="Seconds since the loader started. Lets a caller show progress.",
     )
-    load_error: Optional[str] = Field(
+    load_error: str | None = Field(
         default=None,
         description="Exception from the loader, if stage is 'failed'.",
     )
@@ -192,18 +197,18 @@ class PromoteResponse(BaseModel):
     """Response for POST /deployment/promote"""
 
     ok: bool
-    from_state: Optional[str] = None
-    to_state: Optional[str] = None
-    reason: Optional[str] = None
+    from_state: str | None = None
+    to_state: str | None = None
+    reason: str | None = None
 
 
 class RollbackResponse(BaseModel):
     """Response for POST /deployment/rollback"""
 
     ok: bool
-    from_state: Optional[str] = None
-    to_state: Optional[str] = None
-    reason: Optional[str] = None
+    from_state: str | None = None
+    to_state: str | None = None
+    reason: str | None = None
     cache_flushed: bool = False
 
 
@@ -222,7 +227,7 @@ class DisagreementStatsResponse(BaseModel):
     disagreement_rate: float
     alert_active: bool
     alert_threshold: float
-    direction_breakdown: Dict[str, int]
+    direction_breakdown: dict[str, int]
     avg_confidence_gap_all: float
     avg_confidence_gap_on_disagreements: float
 
@@ -234,14 +239,14 @@ class DriftStatusResponse(BaseModel):
     reference_size: int
     total_records: int
     checks_run: int
-    last_check: Optional[dict] = None
+    last_check: dict | None = None
     thresholds: dict
 
 
 class AuditLogResponse(BaseModel):
     """Response for GET /deployment/audit"""
 
-    entries: List[dict]
+    entries: list[dict]
     total_entries: int
 
 

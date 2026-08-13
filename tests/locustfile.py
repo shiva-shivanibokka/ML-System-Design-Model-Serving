@@ -32,7 +32,6 @@ import random
 import statistics
 import threading
 from collections import defaultdict
-from typing import Dict, List
 
 from locust import HttpUser, between, events, tag, task
 
@@ -83,8 +82,8 @@ SAMPLE_TEXTS = [
 # Per-version tracking (module level, updated by all workers)
 # ---------------------------------------------------------------------------
 
-_version_counts: Dict[str, int] = defaultdict(int)
-_version_latencies: Dict[str, List[float]] = defaultdict(list)
+_version_counts: dict[str, int] = defaultdict(int)
+_version_latencies: dict[str, list[float]] = defaultdict(list)
 _lock = threading.Lock()
 
 
@@ -213,9 +212,7 @@ class HighThroughputUser(HttpUser):
     @task
     @tag("stress")
     def predict_burst(self):
-        text = random.choice(
-            SAMPLE_TEXTS[:10]
-        )  # fewer unique texts = higher cache hit rate
+        text = random.choice(SAMPLE_TEXTS[:10])  # fewer unique texts = higher cache hit rate
         self.client.post(
             "/predict",
             json={"text": text},

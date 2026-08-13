@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push supersedes the run in progress for the same ref.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Empty means "this backend does not exist here", which is how the service
+  # distinguishes absent from broken. Without these the suite would spend its
+  # time failing to resolve docker-compose hostnames.
+  REDIS_HOST: ""
+  EPHEMERAL_STATE: "1"
+  PYTHONPATH: "."
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff==0.6.9
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install CPU-only torch
+        # Plain `pip install torch` on Linux pulls the CUDA build and ~2.5GB of
+        # nvidia-* wheels for a service that runs on device=-1. The CPU index
+        # is the same torch without any of that.
+        run: |
+          pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.3.0
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-serve.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Test
+        # No model weights are downloaded: tests/test_api.py replaces the
+        # loader with stubs, so CI never depends on the HuggingFace Hub being
+        # up and the suite finishes in seconds rather than minutes.
+        run: pytest --cov --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: warn
+
+  docker-build:
+    # Only worth paying for once the code is known good.
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the serving image
+        # Build only. Pushing is done by `gcloud run deploy --source .`, which
+        # builds from this same Dockerfile.
+        run: docker build -t model-serving:ci .

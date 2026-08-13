@@ -33,7 +33,6 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, List
 
 import structlog
 
@@ -68,7 +67,7 @@ class DisagreementMonitor:
         self._alert_threshold: float = cfg.alert_threshold
         self._min_samples: int = cfg.min_samples_before_alert
 
-        self._records: Deque[DisagreementRecord] = deque(maxlen=self._window_size)
+        self._records: deque[DisagreementRecord] = deque(maxlen=self._window_size)
         self._lock = threading.Lock()
 
         # Lifetime counters (not windowed)
@@ -155,7 +154,7 @@ class DisagreementMonitor:
     ) -> None:
         """Update Prometheus metrics. Must hold lock."""
         try:
-            from monitoring.metrics import DISAGREEMENT_RATE, DISAGREEMENT_EVENTS
+            from monitoring.metrics import DISAGREEMENT_EVENTS, DISAGREEMENT_RATE
 
             DISAGREEMENT_RATE.set(rate)
             if not agrees:
@@ -195,7 +194,7 @@ class DisagreementMonitor:
         rate = len(disagreements) / len(records)
 
         # Direction breakdown: which label transitions are happening
-        direction_breakdown: Dict[str, int] = {}
+        direction_breakdown: dict[str, int] = {}
         for r in disagreements:
             key = f"{r.v1_label}_to_{r.v2_label}"
             direction_breakdown[key] = direction_breakdown.get(key, 0) + 1
@@ -214,8 +213,7 @@ class DisagreementMonitor:
             "agreements_in_window": len(agreements),
             "disagreement_rate": round(rate, 4),
             "alert_active": (
-                self._total_comparisons >= self._min_samples
-                and rate > self._alert_threshold
+                self._total_comparisons >= self._min_samples and rate > self._alert_threshold
             ),
             "alert_threshold": self._alert_threshold,
             "direction_breakdown": direction_breakdown,
@@ -223,7 +221,7 @@ class DisagreementMonitor:
             "avg_confidence_gap_on_disagreements": round(avg_gap_disagree, 4),
         }
 
-    def get_recent_disagreements(self, n: int = 20) -> List[dict]:
+    def get_recent_disagreements(self, n: int = 20) -> list[dict]:
         """Return the N most recent disagreement records for display."""
         with self._lock:
             records = list(self._records)
@@ -240,6 +238,36 @@ class DisagreementMonitor:
                 "input_length": r.input_length,
             }
             for r in recent
+        ]
+
+    def get_recent_comparisons(self, n: int = 40) -> list[dict]:
+        """
+        Return the N most recent comparisons — agreements included.
+
+        get_recent_disagreements only yields cases where the labels differ, and
+        v2 is v1 quantized to int8, so on ordinary input the two agree
+        essentially always and that list stays empty. A panel plotting only
+        disagreements therefore shows nothing, which reads as a broken chart
+        rather than as the finding it actually is.
+
+        The confidence gap is non-zero on every comparison, so plotting all of
+        them shows how much quantization moves each answer, and disagreements
+        become marked points on a trace that already exists.
+        """
+        with self._lock:
+            records = list(self._records)[-n:]
+
+        return [
+            {
+                "v1_label": r.v1_label,
+                "v2_label": r.v2_label,
+                "v1_score": round(r.v1_score, 4),
+                "v2_score": round(r.v2_score, 4),
+                "confidence_gap": round(r.confidence_gap, 6),
+                "agrees": r.agrees,
+                "input_length": r.input_length,
+            }
+            for r in records
         ]
 
     def reset(self) -> None:

@@ -1,10 +1,17 @@
 # ML System Design: Production Model Serving
 
+[![CI](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml/badge.svg)](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![Tests](https://img.shields.io/badge/tests-69-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen)
+
 A production-grade model deployment system built around the question every ML engineering interview asks:
 
 > **"You have a new model. How do you deploy it without breaking production?"**
 
 This project implements the full answer: shadow mode validation, canary progressive delivery, circuit breaker failover, Evidently AI drift detection, disagreement rate monitoring, and a complete audit trail — all wired into a real FastAPI serving layer with Redis, Prometheus, Grafana, and Docker.
+
+Tests run without downloading model weights: the API suite replaces the loader with stubs, so CI finishes in seconds and never depends on the HuggingFace Hub being reachable.
 
 **Live demo: [model-serving on Cloud Run](https://model-serving-548930096299.us-central1.run.app)** — control panel at `/ui`, API docs at `/docs`.
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import Optional
 
 import structlog
 
@@ -58,7 +57,7 @@ class RequestRouter:
         self,
         text: str,
         trace_id: str,
-    ) -> tuple[PredictionResult, Optional[PredictionResult], str]:
+    ) -> tuple[PredictionResult, PredictionResult | None, str]:
         """
         Route a request based on current deployment state.
 
@@ -93,7 +92,7 @@ class RequestRouter:
 
     async def _route_shadow(
         self, text: str, trace_id: str
-    ) -> tuple[PredictionResult, Optional[PredictionResult], str]:
+    ) -> tuple[PredictionResult, PredictionResult | None, str]:
         """
         Shadow mode: v1 is primary, v2 runs silently in background.
 
@@ -107,7 +106,7 @@ class RequestRouter:
         state_machine.record_request("v1", v1_result.latency_ms, error=False)
 
         # Fire v2 as a background task — user response already computed
-        v2_result: Optional[PredictionResult] = None
+        v2_result: PredictionResult | None = None
         try:
             v2_result = await asyncio.get_event_loop().run_in_executor(
                 None, self._safe_v2_predict, text
@@ -121,7 +120,7 @@ class RequestRouter:
 
     async def _route_canary(
         self, text: str, trace_id: str
-    ) -> tuple[PredictionResult, Optional[PredictionResult], str]:
+    ) -> tuple[PredictionResult, PredictionResult | None, str]:
         """
         Canary mode: weighted random routing.
         If v2 fails (circuit open or exception) → fall back to v1.
@@ -170,7 +169,7 @@ class RequestRouter:
 
     async def _route_full(
         self, text: str, trace_id: str
-    ) -> tuple[PredictionResult, Optional[PredictionResult], str]:
+    ) -> tuple[PredictionResult, PredictionResult | None, str]:
         """
         Full deployment: all traffic to v2.
         If circuit is open → fall back to v1 (Blue/Green instant switch).
@@ -203,11 +202,9 @@ class RequestRouter:
 
     async def _route_v1_only(
         self, text: str, trace_id: str
-    ) -> tuple[PredictionResult, Optional[PredictionResult], str]:
+    ) -> tuple[PredictionResult, PredictionResult | None, str]:
         """Rolled back / unknown state — pure v1."""
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, self._model_v1.predict, text
-        )
+        result = await asyncio.get_event_loop().run_in_executor(None, self._model_v1.predict, text)
         state_machine.record_request("v1", result.latency_ms, error=False)
         return result, None, "v1"
 
@@ -215,7 +212,7 @@ class RequestRouter:
     # v2 inference wrappers
     # -----------------------------------------------------------------------
 
-    def _safe_v2_predict(self, text: str) -> Optional[PredictionResult]:
+    def _safe_v2_predict(self, text: str) -> PredictionResult | None:
         """
         Run v2 through circuit breaker. Returns None on any error.
         Used in shadow mode where errors are silently absorbed.

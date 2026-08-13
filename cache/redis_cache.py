@@ -24,7 +24,6 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from typing import Optional
 
 import structlog
 
@@ -60,7 +59,7 @@ class _InProcessBackend:
     def __init__(self) -> None:
         self._store: dict[str, tuple[float, str]] = {}
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         entry = self._store.get(key)
         if entry is None:
             return None
@@ -91,7 +90,7 @@ class PredictionCache:
     """
 
     def __init__(self) -> None:
-        self._client: Optional[object] = None
+        self._client: object | None = None
         self._available: bool = False
         self._backend: str = "none"
         self._hits: int = 0
@@ -156,7 +155,7 @@ class PredictionCache:
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
         return f"{settings.cache.key_prefix}{model_version}:{text_hash}"
 
-    def get(self, text: str, model_version: str) -> Optional[dict]:
+    def get(self, text: str, model_version: str) -> dict | None:
         """
         Look up a cached prediction. Returns dict or None.
         Never raises — cache miss and cache error both return None.
@@ -238,5 +237,5 @@ class PredictionCache:
 
     @property
     def backend(self) -> str:
-        """"redis" | "in_process" | "none" — which store is answering."""
+        """ "redis" | "in_process" | "none" — which store is answering."""
         return self._backend

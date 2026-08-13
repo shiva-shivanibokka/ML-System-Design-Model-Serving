@@ -9,7 +9,6 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List
 
 
 @dataclass
@@ -103,7 +102,7 @@ class BaseModel(ABC):
         if not self._loaded:
             raise RuntimeError(f"Model {self.version} must be loaded before warm-up.")
 
-        latencies: List[float] = []
+        latencies: list[float] = []
         for _ in range(num_requests):
             t0 = time.perf_counter()
             self._run_inference(dummy_text)

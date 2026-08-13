@@ -1,0 +1,42 @@
+[tool.pytest.ini_options]
+# The repo root must come first on sys.path. Without it, `import tests.conftest`
+# can resolve to an unrelated `tests` package installed in site-packages, which
+# fails in a way that looks like a missing symbol rather than a shadowed import.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+filterwarnings = [
+    # Third-party deprecation noise drowns real signal; the project's own
+    # warnings are still shown.
+    "ignore::DeprecationWarning:importlib_metadata.*",
+    "ignore::DeprecationWarning:litestar.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "venv", "data", "web"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    "E501",  # line length is handled by the formatter, not the linter
+    "B008",  # FastAPI's Depends()-in-defaults pattern is idiomatic here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests reach into private attributes deliberately — jumping the circuit
+# breaker's clock is far better than sleeping through a 30-second timeout.
+"tests/*" = ["B018", "E402"]
+
+[tool.coverage.run]
+source = ["api", "cache", "configs", "deployment", "models", "monitoring"]
+omit = ["*/__pycache__/*", "tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

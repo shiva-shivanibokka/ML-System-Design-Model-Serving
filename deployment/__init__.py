@@ -1,6 +1,6 @@
-from deployment.state_machine import DeploymentStateMachine, DeploymentState
-from deployment.router import RequestRouter
 from deployment.circuit_breaker import CircuitBreaker, CircuitState
+from deployment.router import RequestRouter
+from deployment.state_machine import DeploymentState, DeploymentStateMachine
 
 __all__ = [
     "DeploymentStateMachine",

@@ -9,10 +9,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
 
 import yaml
-
 
 # ---------------------------------------------------------------------------
 # Leaf dataclasses
@@ -155,8 +153,8 @@ class Settings:
 
 def _load_settings() -> Settings:
     config_path = Path(__file__).parent / "config.yaml"
-    with open(config_path, "r") as f:
-        raw: Dict = yaml.safe_load(f)
+    with open(config_path) as f:
+        raw: dict = yaml.safe_load(f)
 
     m = raw["models"]
     d = raw["deployment"]

@@ -35,10 +35,9 @@ import threading
 import time
 from collections import deque
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Deque, Dict, List, Optional
 
 import structlog
 
@@ -73,7 +72,7 @@ class DeploymentState(str, Enum):
 
 
 # Ordered progression for auto-advance logic
-PROGRESSION_ORDER: List[DeploymentState] = [
+PROGRESSION_ORDER: list[DeploymentState] = [
     DeploymentState.SHADOW,
     DeploymentState.CANARY_5,
     DeploymentState.CANARY_25,
@@ -82,7 +81,7 @@ PROGRESSION_ORDER: List[DeploymentState] = [
 ]
 
 # Traffic fraction v2 receives in each state
-V2_TRAFFIC_FRACTION: Dict[DeploymentState, float] = {
+V2_TRAFFIC_FRACTION: dict[DeploymentState, float] = {
     DeploymentState.SHADOW: 0.0,  # shadow = no live traffic to v2
     DeploymentState.CANARY_5: 0.05,
     DeploymentState.CANARY_25: 0.25,
@@ -92,13 +91,10 @@ V2_TRAFFIC_FRACTION: Dict[DeploymentState, float] = {
 }
 
 # How long each canary stage must stay clean before auto-progression (seconds)
-AUTO_PROGRESSION_DURATIONS: Dict[DeploymentState, int] = {
-    DeploymentState.CANARY_5: settings.deployment.auto_progression.canary_5_duration_minutes
-    * 60,
-    DeploymentState.CANARY_25: settings.deployment.auto_progression.canary_25_duration_minutes
-    * 60,
-    DeploymentState.CANARY_50: settings.deployment.auto_progression.canary_50_duration_minutes
-    * 60,
+AUTO_PROGRESSION_DURATIONS: dict[DeploymentState, int] = {
+    DeploymentState.CANARY_5: settings.deployment.auto_progression.canary_5_duration_minutes * 60,
+    DeploymentState.CANARY_25: settings.deployment.auto_progression.canary_25_duration_minutes * 60,
+    DeploymentState.CANARY_50: settings.deployment.auto_progression.canary_50_duration_minutes * 60,
 }
 
 
@@ -136,11 +132,9 @@ class DeploymentStateMachine:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._state: DeploymentState = DeploymentState(
-            settings.deployment.initial_state
-        )
+        self._state: DeploymentState = DeploymentState(settings.deployment.initial_state)
         self._state_entered_at: float = time.monotonic()
-        self._audit_log: Deque[AuditEntry] = deque(
+        self._audit_log: deque[AuditEntry] = deque(
             maxlen=settings.monitoring.audit.max_entries_in_memory
         )
         self._total_requests: int = 0
@@ -148,11 +142,11 @@ class DeploymentStateMachine:
         # Counters used for rollback decision — updated by the router
         self._v2_requests: int = 0
         self._v2_errors: int = 0
-        self._v2_latencies: Deque[float] = deque(maxlen=200)
-        self._v1_latencies: Deque[float] = deque(maxlen=200)
+        self._v2_latencies: deque[float] = deque(maxlen=200)
+        self._v1_latencies: deque[float] = deque(maxlen=200)
 
         # Auto-progression background thread
-        self._auto_thread: Optional[threading.Thread] = None
+        self._auto_thread: threading.Thread | None = None
         self._stop_auto: threading.Event = threading.Event()
 
         # Ensure persistence dirs exist
@@ -160,9 +154,7 @@ class DeploymentStateMachine:
             Path(settings.deployment.state_persistence_path).parent.mkdir(
                 parents=True, exist_ok=True
             )
-            Path(settings.deployment.audit_log_path).parent.mkdir(
-                parents=True, exist_ok=True
-            )
+            Path(settings.deployment.audit_log_path).parent.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------------------------------------------------
     # Startup / shutdown
@@ -180,16 +172,12 @@ class DeploymentStateMachine:
         elif path.exists():
             try:
                 data = json.loads(path.read_text())
-                loaded_state = DeploymentState(
-                    data.get("state", settings.deployment.initial_state)
-                )
+                loaded_state = DeploymentState(data.get("state", settings.deployment.initial_state))
                 with self._lock:
                     self._state = loaded_state
                 log.info("deployment_state_loaded", state=loaded_state.value)
             except Exception as e:
-                log.warning(
-                    "state_load_failed", error=str(e), fallback=self._state.value
-                )
+                log.warning("state_load_failed", error=str(e), fallback=self._state.value)
         else:
             log.info("no_persisted_state", using=self._state.value)
 
@@ -217,6 +205,25 @@ class DeploymentStateMachine:
         """Called during FastAPI shutdown."""
         self._stop_auto.set()
 
+    def reset(self) -> None:
+        """
+        Return to shadow and clear all counters, latencies and audit history.
+
+        Matches DisagreementMonitor.reset and DriftDetector.reset. This is a
+        test seam: the machine is a module-level singleton, so without it one
+        test leaving the machine in canary changes what the next test sees, and
+        the suite starts depending on execution order.
+        """
+        with self._lock:
+            self._state = DeploymentState.SHADOW
+            self._state_entered_at = time.monotonic()
+            self._v1_latencies.clear()
+            self._v2_latencies.clear()
+            self._v2_requests = 0
+            self._v2_errors = 0
+            self._total_requests = 0
+            self._audit_log.clear()
+
     # -----------------------------------------------------------------------
     # State reads (no lock needed — reads are atomic on CPython)
     # -----------------------------------------------------------------------
@@ -242,9 +249,7 @@ class DeploymentStateMachine:
     def get_status(self) -> dict:
         """Full status snapshot for the API /deployment/status endpoint."""
         with self._lock:
-            v2_error_rate = (
-                self._v2_errors / self._v2_requests if self._v2_requests > 0 else 0.0
-            )
+            v2_error_rate = self._v2_errors / self._v2_requests if self._v2_requests > 0 else 0.0
             v2_p99 = self._percentile(self._v2_latencies, 99)
             v1_p99 = self._percentile(self._v1_latencies, 99)
             time_in_state = time.monotonic() - self._state_entered_at
@@ -267,7 +272,7 @@ class DeploymentStateMachine:
                 },
             }
 
-    def get_audit_log(self) -> List[dict]:
+    def get_audit_log(self) -> list[dict]:
         """Return recent audit entries as list of dicts."""
         with self._lock:
             return [asdict(e) for e in self._audit_log]
@@ -310,7 +315,12 @@ class DeploymentStateMachine:
 
     def rollback(self, trigger: str = "manual", note: str = "") -> dict:
         """
-        Roll back to shadow mode. Flushes cache to avoid stale v2 predictions.
+        Leave the progression and send all traffic back to v1.
+
+        This does NOT flush the prediction cache — the API route does that, so
+        that the state machine stays free of an I/O dependency. Whoever calls
+        this directly is responsible for the flush; without it, answers
+        produced by the withdrawn model outlive the rollback.
         """
         with self._lock:
             current = self._state
@@ -430,14 +440,12 @@ class DeploymentStateMachine:
         """
         with self._lock:
             entry = AuditEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(UTC).isoformat(),
                 from_state=from_state.value,
                 to_state=to_state.value,
                 trigger=trigger,
                 v2_error_rate_at_event=(
-                    round(self._v2_errors / self._v2_requests, 4)
-                    if self._v2_requests > 0
-                    else 0.0
+                    round(self._v2_errors / self._v2_requests, 4) if self._v2_requests > 0 else 0.0
                 ),
                 v2_p99_latency_ms=round(self._percentile(self._v2_latencies, 99), 1),
                 v1_p99_latency_ms=round(self._percentile(self._v1_latencies, 99), 1),
@@ -466,14 +474,12 @@ class DeploymentStateMachine:
         Writes to in-memory log, disk JSONL, and Prometheus counter.
         """
         from_state = self._state
-        v2_error_rate = (
-            self._v2_errors / self._v2_requests if self._v2_requests > 0 else 0.0
-        )
+        v2_error_rate = self._v2_errors / self._v2_requests if self._v2_requests > 0 else 0.0
         v2_p99 = self._percentile(self._v2_latencies, 99)
         v1_p99 = self._percentile(self._v1_latencies, 99)
 
         entry = AuditEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             from_state=from_state.value,
             to_state=to_state.value,
             trigger=trigger,
@@ -524,7 +530,7 @@ class DeploymentStateMachine:
                 json.dumps(
                     {
                         "state": self._state.value,
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(UTC).isoformat(),
                     },
                     indent=2,
                 )
@@ -587,7 +593,7 @@ class DeploymentStateMachine:
                     )
 
     @staticmethod
-    def _percentile(data: Deque[float], p: int) -> float:
+    def _percentile(data: deque[float], p: int) -> float:
         """Compute p-th percentile from a deque. Returns 0 if empty."""
         if not data:
             return 0.0

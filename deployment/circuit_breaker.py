@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 import structlog
 

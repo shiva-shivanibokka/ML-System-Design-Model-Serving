@@ -39,7 +39,6 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request, status
@@ -77,8 +76,8 @@ from monitoring.metrics import (
     INFERENCE_REQUESTS,
     MODEL_READY,
     MODEL_WARMUP_LATENCY,
-    update_deployment_gauges,
     update_circuit_breaker_gauge,
+    update_deployment_gauges,
 )
 
 log = structlog.get_logger(__name__)
@@ -104,7 +103,7 @@ _startup_time: float = 0.0
 # with the current stage until warm-up completes. That is what a readiness probe
 # is for — this just lets the probe do its job.
 _load_stage: str = "not_started"
-_load_error: Optional[str] = None
+_load_error: str | None = None
 _load_started_at: float = 0.0
 LOAD_STAGES = (
     "not_started",
@@ -352,8 +351,8 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
         log.error("predict_router_error", error=str(e), trace_id=trace_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Inference failed: {str(e)}",
-        )
+            detail=f"Inference failed: {e}",
+        ) from e
     total_latency_ms = (time.perf_counter() - t0) * 1000.0
 
     # ── Prometheus metrics ────────────────────────────────────────────────
@@ -561,7 +560,10 @@ async def rollback() -> RollbackResponse:
     All traffic returns to v1. Redis cache is flushed to remove any v2 predictions.
     """
     result = state_machine.rollback(trigger="manual_rollback", note="Triggered via API")
-    flushed = cache.flush()
+    # Only flush when a rollback actually happened. Rolling back while already
+    # in shadow is a no-op on the state machine, and emptying the cache anyway
+    # would throw away every valid v1 answer to no purpose.
+    flushed = cache.flush() if result.get("ok") else 0
     update_deployment_gauges(
         state_machine.state.value,
         state_machine.v2_traffic_fraction,
@@ -652,6 +654,26 @@ async def recent_disagreements(n: int = 20) -> dict:
     """
     return {
         "recent_disagreements": disagreement_monitor.get_recent_disagreements(n),
+        "n_requested": n,
+    }
+
+
+@app.get(
+    "/monitoring/disagreement/comparisons",
+    summary="Recent v1 vs v2 comparisons, agreements included",
+    tags=["Monitoring"],
+)
+async def recent_comparisons(n: int = 40) -> dict:
+    """
+    The N most recent shadow comparisons whether or not the labels matched.
+
+    v2 is v1 quantized to int8, so the two agree on essentially all ordinary
+    input and the disagreements-only list stays empty. The confidence gap is
+    non-zero on every comparison, so this is the series that actually shows
+    what quantization does to the model's answers.
+    """
+    return {
+        "comparisons": disagreement_monitor.get_recent_comparisons(n),
         "n_requested": n,
     }
 

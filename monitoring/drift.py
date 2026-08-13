@@ -39,7 +39,6 @@ from __future__ import annotations
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, List, Optional
 
 import numpy as np
 import structlog
@@ -54,8 +53,8 @@ log = structlog.get_logger(__name__)
 try:
     import pandas as pd  # noqa: F401
     from evidently import ColumnMapping  # noqa: F401
-    from evidently.report import Report  # noqa: F401
     from evidently.metric_preset import DataDriftPreset  # noqa: F401
+    from evidently.report import Report  # noqa: F401
 
     EVIDENTLY_AVAILABLE = True
 except ImportError:
@@ -105,17 +104,17 @@ class DriftDetector:
         self._confidence_threshold: float = cfg.confidence_drift_threshold
 
         # Reference window (frozen after reaching target size)
-        self._reference_text_lengths: List[int] = []
-        self._reference_confidences: List[float] = []
+        self._reference_text_lengths: list[int] = []
+        self._reference_confidences: list[float] = []
         self._reference_frozen: bool = False
 
         # Rolling current window
-        self._current_text_lengths: Deque[int] = deque(maxlen=self._detection_size)
-        self._current_confidences: Deque[float] = deque(maxlen=self._detection_size)
+        self._current_text_lengths: deque[int] = deque(maxlen=self._detection_size)
+        self._current_confidences: deque[float] = deque(maxlen=self._detection_size)
 
         self._total_records: int = 0
-        self._last_check_result: Optional[DriftCheckResult] = None
-        self._check_history: List[DriftCheckResult] = []
+        self._last_check_result: DriftCheckResult | None = None
+        self._check_history: list[DriftCheckResult] = []
         self._lock = threading.Lock()
 
     def record(self, text_length: int, confidence: float) -> None:
@@ -160,13 +159,9 @@ class DriftDetector:
         cur_confs = list(self._current_confidences)
 
         if EVIDENTLY_AVAILABLE:
-            return self._check_with_evidently(
-                ref_lengths, ref_confs, cur_lengths, cur_confs
-            )
+            return self._check_with_evidently(ref_lengths, ref_confs, cur_lengths, cur_confs)
         elif SCIPY_AVAILABLE:
-            return self._check_with_js_divergence(
-                ref_lengths, ref_confs, cur_lengths, cur_confs
-            )
+            return self._check_with_js_divergence(ref_lengths, ref_confs, cur_lengths, cur_confs)
         else:
             return DriftCheckResult(
                 checked_at_request_n=self._total_records,
@@ -186,8 +181,8 @@ class DriftDetector:
         """Run Evidently DataDriftPreset on text length and confidence features."""
         try:
             import pandas as pd
-            from evidently.report import Report
             from evidently.metric_preset import DataDriftPreset
+            from evidently.report import Report
 
             ref_df = pd.DataFrame(
                 {
@@ -240,9 +235,7 @@ class DriftDetector:
             )
         except Exception as e:
             log.warning("evidently_check_failed", error=str(e), fallback="scipy")
-            return self._check_with_js_divergence(
-                ref_lengths, ref_confs, cur_lengths, cur_confs
-            )
+            return self._check_with_js_divergence(ref_lengths, ref_confs, cur_lengths, cur_confs)
 
     def _check_with_js_divergence(
         self, ref_lengths, ref_confs, cur_lengths, cur_confs
@@ -320,12 +313,8 @@ class DriftDetector:
             DRIFT_DETECTED.labels(drift_type="confidence_score").set(
                 1.0 if result.confidence_drifted else 0.0
             )
-            DRIFT_SCORE.labels(drift_type="text_length").set(
-                result.text_length_drift_score
-            )
-            DRIFT_SCORE.labels(drift_type="confidence_score").set(
-                result.confidence_drift_score
-            )
+            DRIFT_SCORE.labels(drift_type="text_length").set(result.text_length_drift_score)
+            DRIFT_SCORE.labels(drift_type="confidence_score").set(result.confidence_drift_score)
         except Exception:
             pass
 
@@ -367,7 +356,7 @@ class DriftDetector:
                 },
             }
 
-    def get_history(self) -> List[dict]:
+    def get_history(self) -> list[dict]:
         """Return all historical drift check results."""
         with self._lock:
             from dataclasses import asdict
