@@ -214,20 +214,59 @@ a { color: var(--traffic); }
 .step p { margin: 0; font-size: 15px; color: var(--dim); line-height: 1.65; }
 .step p b { color: var(--text); font-weight: 700; }
 
-.howto details { margin-top: 20px; }
-.howto summary {
-  cursor: pointer;
-  font-size: 14px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--traffic);
-  list-style: none;
+/* ───────────────────────── manual ───────────────────────── */
+
+.manual { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 900px) { .manual { grid-template-columns: 1fr; } }
+
+/* Each entry carries the same hue its tab uses elsewhere, so the manual and the
+ * thing it describes are visibly the same subject. */
+.manual .entry {
+  border-left: 3px solid var(--rule-hi);
+  padding: 2px 0 6px 17px;
 }
-.howto summary::-webkit-details-marker { display: none; }
-.howto summary::before { content: "▸ "; }
-.howto details[open] summary::before { content: "▾ "; }
-.howto details p { color: var(--dim); font-size: 15.5px; line-height: 1.72; }
-.howto details b { color: var(--text); font-weight: 400; }
+
+.manual .entry h3 {
+  font-size: 16px;
+  margin: 0 0 8px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.manual .entry p { margin: 0 0 8px; font-size: 15px; line-height: 1.65; color: var(--dim); }
+.manual .entry p:last-child { margin-bottom: 0; }
+.manual .entry b { color: var(--text); font-weight: 700; }
+.manual .entry .look { color: var(--faint); font-size: 14px; }
+
+.manual .predict { border-left-color: var(--traffic); }
+.manual .predict h3 { color: var(--traffic); }
+.manual .comparison { border-left-color: var(--gap); }
+.manual .comparison h3 { color: var(--gap); }
+.manual .rollout { border-left-color: var(--speed); }
+.manual .rollout h3 { color: var(--speed); }
+.manual .drift { border-left-color: var(--warn); }
+.manual .drift h3 { color: var(--warn); }
+.manual .cache { border-left-color: var(--cache); }
+.manual .cache h3 { color: var(--cache); }
+.manual .audit { border-left-color: var(--ok); }
+.manual .audit h3 { color: var(--ok); }
+
+/* ───────────────────────── credit ───────────────────────── */
+
+.credit {
+  margin: 0;
+  padding: 26px var(--gutter) 4px;
+  text-align: center;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* The intro's paragraphs used to sit behind a "Why do it this way?" disclosure.
+ * They are the introduction now, so there is nothing left to disclose. */
+.howto .lede + .lede { margin-top: -6px; }
 
 /* ───────────────────────── stage lane ───────────────────────── */
 

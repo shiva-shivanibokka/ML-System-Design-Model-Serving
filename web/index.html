@@ -60,63 +60,28 @@
     </span>
   </div>
 
-  <!-- ══════════════ how to use ══════════════ -->
+  <!-- ══════════════ introduction ══════════════ -->
   <section class="howto">
-    <h2>How to use this demo</h2>
+    <h2>What this is</h2>
     <p class="lede">
       This is a control panel for <b>safely replacing one AI model with another</b> while it is
       serving real people. The old model is <b>v1</b>. The new one is <b>v2</b> — the same model
       compressed to run faster. The question this whole system exists to answer is: <b>can we trust
       v2 enough to let it start answering real requests?</b> You are the person deciding.
     </p>
-
-    <div class="steps">
-      <div class="step">
-        <span class="n">Step 1 · Predict tab</span>
-        <h3>Send a sentence</h3>
-        <p>Press <b>Surprise me</b> for a random sentence, or type your own, then press
-          <b>Classify</b>. A large <b>POSITIVE</b> or <b>NEGATIVE</b> appears below the box — that is
-          the answer, and the small print under it says which model produced it.</p>
-      </div>
-      <div class="step">
-        <span class="n">Step 2 · Comparison tab</span>
-        <h3>See if they agree</h3>
-        <p>Look at the first number, <b>Average gap</b>. That is how far apart the two models were —
-          near <b>0</b> means they agree. Then look at the chart below it: every dot is one sentence,
-          and a <b>pink</b> dot is one where they gave opposite answers.</p>
-      </div>
-      <div class="step">
-        <span class="n">Step 3 · Rollout tab</span>
-        <h3>Give the new model traffic</h3>
-        <p>Press <b>Promote</b>. Watch the <b>Traffic split</b> bar fill with the new model's colour,
-          and the row of stages at the top of this page move along: Shadow → Canary 5 → 25 → 50 →
-          Full.</p>
-      </div>
-      <div class="step">
-        <span class="n">Any time · Rollout tab</span>
-        <h3>Pull it back</h3>
-        <p>Press <b>Roll back</b>. The stage row goes dim with a red line struck through it and every
-          request returns to the old model instantly. The <b>Audit</b> tab then shows what the numbers
-          were at the moment you decided.</p>
-      </div>
-    </div>
-
-    <details>
-      <summary>Why do it this way?</summary>
-      <p>
-        Swapping a model all at once is how outages happen: the new one behaves differently on
-        inputs nobody tested, and by the time anyone notices, every user has been affected. The
-        alternative is to let the new model answer <b>silently</b> at first — it sees every request
-        and its answers are recorded, but nobody receives them. Once its answers look right, it
-        gets a small slice of real traffic, and the slice grows only while the numbers stay clean.
-      </p>
-      <p>
-        Everything on this page updates from the running service — nothing here is pre-recorded.
-        The panel refreshes when you switch tabs or press Refresh rather than polling constantly,
-        because a page that polls forever would keep the server awake and defeat the point of
-        letting it sleep.
-      </p>
-    </details>
+    <p class="lede">
+      Swapping a model all at once is how outages happen: the new one behaves differently on inputs
+      nobody tested, and by the time anyone notices, every user has been affected. The alternative is
+      to let the new model answer <b>silently</b> at first — it sees every request and its answers
+      are recorded, but nobody receives them. Once its answers look right, it gets a small slice of
+      real traffic, and the slice grows only while the numbers stay clean.
+    </p>
+    <p class="lede">
+      Everything here updates from the running service — nothing is pre-recorded. The panel refreshes
+      when you switch tabs or press Refresh rather than polling constantly, because a page that polls
+      forever would keep the server awake for no reason. <b>Start on the Manual tab</b> if this is
+      your first visit.
+    </p>
   </section>
 
   <!-- ══════════════ stage lane ══════════════ -->
@@ -137,16 +102,119 @@
 
   <!-- ══════════════ tabs ══════════════ -->
   <nav class="tabs" id="tabs" role="tablist">
-    <button class="on" data-view="predict" role="tab">Predict</button>
-    <button data-view="rollout" role="tab">Rollout</button>
+    <button class="on" data-view="manual" role="tab">Manual</button>
+    <button data-view="predict" role="tab">Predict</button>
     <button data-view="comparison" role="tab">Comparison</button>
+    <button data-view="rollout" role="tab">Rollout</button>
     <button data-view="drift" role="tab">Drift</button>
     <button data-view="cache" role="tab">Cache</button>
     <button data-view="audit" role="tab">Audit</button>
   </nav>
 
+  <!-- ══════════════ MANUAL ══════════════ -->
+  <section class="view on" id="view-manual" role="tabpanel">
+    <p class="explain">
+      Everything you need to operate this panel, in order. Tabs run left to right in the order you
+      would actually use them: send something, check the two models against each other, then decide
+      how much real traffic the new one gets.
+    </p>
+
+    <div class="steps">
+      <div class="step">
+        <span class="n">Step 1 · Predict tab</span>
+        <h3>Send a sentence</h3>
+        <p>Press <b>Surprise me</b> for a random sentence, or type your own, then press
+          <b>Classify</b>. A large <b>POSITIVE</b> or <b>NEGATIVE</b> appears below the box — that is
+          the answer, and the small print under it says which model produced it.</p>
+      </div>
+      <div class="step">
+        <span class="n">Step 2 · Comparison tab</span>
+        <h3>See if they agree</h3>
+        <p>Look at the first number, <b>Average gap</b>. That is how far apart the two models were —
+          near <b>0</b> means they agree. Then look at the chart: one dot per sentence sent to the
+          server so far, and a <b>pink</b> dot is one where the two models gave opposite answers.</p>
+      </div>
+      <div class="step">
+        <span class="n">Step 3 · Rollout tab</span>
+        <h3>Give the new model traffic</h3>
+        <p>Press <b>Promote</b>. Watch the <b>Traffic split</b> bar fill with the new model's colour,
+          and the row of stages at the top of this page move along: Shadow → Canary 5 → 25 → 50 →
+          Full.</p>
+      </div>
+      <div class="step">
+        <span class="n">Any time · Rollout tab</span>
+        <h3>Pull it back</h3>
+        <p>Press <b>Roll back</b>. The stage row goes dim with a red line struck through it and every
+          request returns to the old model instantly. The <b>Audit</b> tab then shows what the numbers
+          were at the moment you decided.</p>
+      </div>
+    </div>
+
+    <div class="block" style="margin-top:22px">
+      <h2>What each tab shows
+        <button class="q" data-tip="Every tab reads live from the running service. Numbers only move when requests are sent, so send a few sentences on Predict before expecting anything here to be interesting.">?</button>
+      </h2>
+
+      <div class="manual">
+        <div class="entry predict">
+          <h3>Predict</h3>
+          <p>Where you send text in. Both models score every sentence, but only one answer is
+            returned to you — which one depends on the rollout stage. Sending the same sentence twice
+            returns the stored answer without running the model at all.</p>
+          <p class="look">Look at: the big verdict word, and <b>answered by</b> underneath it.</p>
+        </div>
+
+        <div class="entry comparison">
+          <h3>Comparison</h3>
+          <p>The two models scored side by side. The <b>confidence gap</b> is how far apart they were
+            on the same sentence; a <b>disagreement</b> is the stronger signal, where they reached
+            opposite conclusions. One dot on the chart is one sentence the server has handled — yours
+            and everyone else's, since the count lives on the server and not in your browser.</p>
+          <p class="look">Look at: <b>Average gap</b> first, then any pink dots on the chart.</p>
+        </div>
+
+        <div class="entry rollout">
+          <h3>Rollout</h3>
+          <p>The controls. <b>Promote</b> hands the new model a bigger slice of live traffic — nothing,
+            then 5%, 25%, 50%, everything. Between steps the system watches how often the new model
+            errors and how slow it is compared to the old one, and rolls itself back without waiting
+            for a human if either crosses its limit.</p>
+          <p class="look">Look at: the <b>Traffic split</b> bar, and the Status column under
+            <b>Measured against limits</b>.</p>
+        </div>
+
+        <div class="entry drift">
+          <h3>Drift</h3>
+          <p>Whether the sentences arriving now still resemble the ones the model was checked against.
+            The first batch is frozen as a baseline and everything later is compared to it on two
+            things: how long the sentences are, and how confident the model is. This says nothing
+            about whether answers are <i>right</i> — only whether the traffic has changed shape.</p>
+          <p class="look">Look at: the two scores against their limits. 0 is identical, 1 is nothing
+            in common.</p>
+        </div>
+
+        <div class="entry cache">
+          <h3>Cache</h3>
+          <p>Repeated sentences return a stored answer instead of running the model again. The panel
+            names whichever store actually answered, because a stand-in quietly taking the name of the
+            real thing would hide a genuine outage.</p>
+          <p class="look">Look at: <b>Answered from cache</b> — it climbs as you resend sentences.</p>
+        </div>
+
+        <div class="entry audit">
+          <h3>Audit</h3>
+          <p>Every change of stage with the numbers exactly as they stood at that moment. This is what
+            makes a rollback explainable afterwards — not just that the system pulled back, but what
+            it was seeing when it decided to.</p>
+          <p class="look">Look at: <b>Trigger</b> — whether a person pressed the button or the system
+            rolled itself back.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ══════════════ PREDICT ══════════════ -->
-  <section class="view on" id="view-predict" role="tabpanel">
+  <section class="view" id="view-predict" role="tabpanel">
     <p class="explain">
       Type a sentence — or press <b>Surprise me</b> for a random one — and both models read it. Which
       one actually answers you depends on the rollout stage above: in <b>Shadow</b> the old model
@@ -188,6 +256,56 @@
         <table id="predictDetail">
           <tbody><tr><td class="k">No prediction yet</td><td class="n">—</td></tr></tbody>
         </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ COMPARISON ══════════════ -->
+  <section class="view" id="view-comparison" role="tabpanel">
+    <p class="explain">
+      Every sentence sent to this server is scored by <b>both</b> models, even though only one answer
+      comes back — so the two can be compared continuously at no risk to anyone. The number that
+      matters is the <b>confidence gap</b>: how far apart they were on the same sentence. A gap near
+      zero means compressing the model changed almost nothing, which is exactly the result you want
+      and the honest finding here. A <b>disagreement</b> is the stronger signal: opposite conclusions
+      on the same input.
+    </p>
+    <p class="explain">
+      One sentence in means one dot on the chart. The count lives on the server, not in your browser,
+      so it includes sentences other people have sent since it last restarted — send a few of your own
+      on <b>Predict</b> and watch it grow.
+    </p>
+
+    <div class="readouts" id="comparisonReadouts"></div>
+
+    <div class="block" style="margin-top:16px">
+      <h2>Confidence gap — one dot per sentence, oldest on the left
+        <button class="q" data-tip="Each dot is one sentence the server has scored with both models. Height is how far apart they were. Pink dots are outright disagreements — opposite answers, not merely different confidence. Only the most recent 40 are drawn.">?</button>
+      </h2>
+      <div class="chart">
+        <svg id="gapChart" viewBox="0 0 720 200" preserveAspectRatio="none" role="img"
+             aria-label="Confidence gap between the two models, one point per comparison"></svg>
+      </div>
+      <div class="legend">
+        <span><i style="background:linear-gradient(90deg,#22F0D4,#9B82FF)"></i>confidence gap</span>
+        <span><i class="dot" style="background:#22F0D4"></i>the models agreed</span>
+        <span><i class="dot" style="background:#FF6BA3"></i>the models disagreed</span>
+        <span><i style="background:#A7AECB"></i>average gap</span>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:16px">
+      <div class="block">
+        <h2>Which way disagreements went
+          <button class="q" data-tip="When the models disagree, this shows the direction — for example old model said positive, new model said negative. A one-sided pattern means the new model has a systematic bias.">?</button>
+        </h2>
+        <table id="directionTable"><tbody></tbody></table>
+      </div>
+      <div class="block">
+        <h2>Most recent comparisons
+          <button class="q tip-left" data-tip="The latest sentences both models scored. The text you typed is deliberately not stored or returned here.">?</button>
+        </h2>
+        <div class="list" id="comparisonList"></div>
       </div>
     </div>
   </section>
@@ -235,50 +353,6 @@
         <thead><tr><th>What is measured</th><th class="n">Now</th><th class="n">Limit</th><th class="n">Status</th></tr></thead>
         <tbody></tbody>
       </table>
-    </div>
-  </section>
-
-  <!-- ══════════════ COMPARISON ══════════════ -->
-  <section class="view" id="view-comparison" role="tabpanel">
-    <p class="explain">
-      Both models read every single sentence, even when only one of them answers you. That makes them
-      directly comparable at no risk. The number that matters is the <b>confidence gap</b>: how far
-      apart the two models were on the same sentence. A gap near zero means compressing the model
-      changed almost nothing — which is exactly the result you want, and the honest finding here.
-      A <b>disagreement</b> is the stronger signal: the two models reached opposite conclusions.
-    </p>
-
-    <div class="readouts" id="comparisonReadouts"></div>
-
-    <div class="block" style="margin-top:16px">
-      <h2>Confidence gap, one point per sentence
-        <button class="q" data-tip="Each point is one sentence both models read. Height is how far apart they were. Pink points are outright disagreements — opposite answers, not just different confidence.">?</button>
-      </h2>
-      <div class="chart">
-        <svg id="gapChart" viewBox="0 0 720 200" preserveAspectRatio="none" role="img"
-             aria-label="Confidence gap between the two models, one point per comparison"></svg>
-      </div>
-      <div class="legend">
-        <span><i style="background:linear-gradient(90deg,#22F0D4,#9B82FF)"></i>confidence gap</span>
-        <span><i class="dot" style="background:#22F0D4"></i>the models agreed</span>
-        <span><i class="dot" style="background:#FF6BA3"></i>the models disagreed</span>
-        <span><i style="background:#A7AECB"></i>average gap</span>
-      </div>
-    </div>
-
-    <div class="grid2" style="margin-top:16px">
-      <div class="block">
-        <h2>Which way disagreements went
-          <button class="q" data-tip="When the models disagree, this shows the direction — for example old model said positive, new model said negative. A one-sided pattern means the new model has a systematic bias.">?</button>
-        </h2>
-        <table id="directionTable"><tbody></tbody></table>
-      </div>
-      <div class="block">
-        <h2>Most recent comparisons
-          <button class="q tip-left" data-tip="The latest sentences both models scored. The text you typed is deliberately not stored or returned here.">?</button>
-        </h2>
-        <div class="list" id="comparisonList"></div>
-      </div>
     </div>
   </section>
 
@@ -360,6 +434,8 @@
       <a class="model-tag" href="/docs" style="align-self:center">API docs →</a>
     </span>
   </div>
+
+  <p class="credit">Built by Shivani Bokka</p>
 
 </div>
 

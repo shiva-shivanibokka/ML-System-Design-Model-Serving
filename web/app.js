@@ -719,16 +719,19 @@ function fmtTime(ts) {
 
 /* ───────────────────────── wiring ───────────────────────── */
 
+// Manual and Predict have nothing to fetch: one is static text, the other only
+// changes when you press a button.
 const VIEWS = {
+  manual: async () => {},
   predict: async () => {},
-  rollout: refreshRollout,
   comparison: refreshComparison,
+  rollout: refreshRollout,
   drift: refreshDrift,
   cache: refreshCache,
   audit: refreshAudit,
 };
 
-let current = "predict";
+let current = "manual";
 
 async function refreshAll() {
   try {
