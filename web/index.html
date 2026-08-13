@@ -35,9 +35,9 @@
     </div>
     <div class="stage-text" id="bootStage">Waking the server…</div>
     <div class="stage-sub" id="bootSub">
-      This demo shuts itself down when nobody is using it, so it costs nothing to run.
-      Starting it back up takes about a minute — it has to load two AI models into memory.
-      Nothing is broken; just give it a moment.
+      The server has to load two AI models into memory before it can answer anything, which takes
+      about a minute after a restart. A scheduled ping keeps it warm, so you will usually skip this
+      screen entirely. Nothing is broken; just give it a moment.
     </div>
     <div class="steps-bar" id="bootSteps">
       <i data-stage="loading_v1"></i><i data-stage="warming_v1"></i>
@@ -348,7 +348,7 @@
   </section>
 
   <div class="hazard" id="hazard">
-    Heads up — this server sleeps when idle, and everything above resets to the beginning when it wakes
+    Heads up — the rollout stage is held in memory, so it returns to the beginning whenever the server restarts
   </div>
 
   <div class="chrome" style="border-top:1px solid var(--rule);border-bottom:0">

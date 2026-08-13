@@ -167,9 +167,9 @@ let booting = false;
 let wokeFromSleep = false;
 
 const SLEEP_NOTE =
-  "The server shuts down when nobody is using it, so it costs nothing to run. Loading both" +
-  " models back into memory takes about a minute. Nothing you did caused this — your sentence" +
-  " has not been lost, and the page reopens by itself.";
+  "The server restarted, so both AI models are being loaded back into memory. That takes about a" +
+  " minute. Nothing you did caused this — your sentence has not been lost, and the page reopens" +
+  " by itself.";
 
 async function boot() {
   if (booting) return;
@@ -200,7 +200,7 @@ function wakeUp() {
   $("shell").hidden = true;
   el.hidden = false;
   $("bootStage").classList.remove("failed");
-  $("bootStage").textContent = "The server went to sleep — waking it back up";
+  $("bootStage").textContent = "The server restarted — loading the models again";
   $("bootSub").textContent = SLEEP_NOTE;
   boot();
 }

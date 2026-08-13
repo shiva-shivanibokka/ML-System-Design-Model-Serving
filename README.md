@@ -24,12 +24,18 @@ deliberate — see [Hosted vs. local](#hosted-vs-local) for what changes and why
 
 Two things about the hosted instance are worth knowing before you click:
 
-**It scales to zero, so the first request is a cold start.** Both models load
-and warm up on a background thread while the API is already answering, so the
-page and every monitoring tab come up immediately and a banner reports which
-stage the loader is on. The first prediction waits for warm-up (roughly 20-40s
-from cold) and then answers; everything after that is single-digit-millisecond
-cached or ~10-30ms warm.
+**It scales to zero, so a cold start is possible.** A Cloud Scheduler job hits
+`/health` every five minutes to hold one instance warm, which costs nothing —
+Cloud Run bills request-processing time here, and an instance that is alive but
+idle is not billed. Expect a warm instance; a deploy or a platform recycle can
+still land you on a cold one.
+
+When that happens, both models load and warm up on a background thread while the
+API is already answering, so the page comes up immediately and reports which
+stage the loader is on. `/predict` answers 503 until they are in memory, and the
+panel puts the loading screen back rather than failing the click. Cold to first
+prediction is roughly 20-40s; after that it is ~10-30ms warm, or single-digit
+milliseconds from cache.
 
 **Deployment state is in memory and resets when the instance is recycled.**
 `GET /deployment/status` says so directly — `"state_durability": "ephemeral"`.
