@@ -1,5 +1,15 @@
 # ML System Design: Production Model Serving
 
+> [!IMPORTANT]
+> **The hosted demo is temporary.** This project's backend runs on Google Cloud
+> Run under a Google Cloud free trial that ends **around 19 September 2026**.
+> When the trial closes the service is stopped, and every `run.app` link below
+> stops responding.
+>
+> Nothing in this repository depends on that. The code, tests and results are
+> complete, and the instructions below run the whole thing locally.
+
+
 [![CI](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml/badge.svg)](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Tests](https://img.shields.io/badge/tests-71-brightgreen)
