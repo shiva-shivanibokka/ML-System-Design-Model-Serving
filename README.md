@@ -211,7 +211,7 @@ docker run --rm --network host \
 
 ### Step 1: Start in Shadow Mode (default)
 
-The system starts in `shadow` state. v2 runs on every request but results are never returned to users. Watch the disagreement rate build up on the Disagreement tab of the control panel, or via:
+The system starts in `shadow` state. v2 runs on every request but results are never returned to users. Watch the disagreement rate build up on the Comparison tab of the control panel, or via:
 
 ```bash
 curl http://localhost:8000/monitoring/disagreement
@@ -258,6 +258,7 @@ curl http://localhost:8000/deployment/audit
 | POST | `/deployment/rollback` | Roll back to shadow |
 | GET | `/deployment/audit` | State transition history |
 | GET | `/monitoring/disagreement` | Shadow mode v1/v2 disagreement stats |
+| GET | `/monitoring/disagreement/comparisons` | Every recent comparison, agreements included, with a `trace_id` and no input text |
 | GET | `/monitoring/drift` | Evidently drift detection status |
 | GET | `/monitoring/cache` | Redis cache hit/miss stats |
 | GET | `/circuit-breaker/status` | Circuit breaker state |
