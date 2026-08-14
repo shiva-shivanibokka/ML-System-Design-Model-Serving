@@ -2,8 +2,17 @@
 
 [![CI](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml/badge.svg)](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-69-brightgreen)
+![Tests](https://img.shields.io/badge/tests-71-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen)
+
+### ▶ [Open the live demo](https://model-serving-548930096299.us-central1.run.app)
+
+Running on Cloud Run — **control panel** at
+[`/ui`](https://model-serving-548930096299.us-central1.run.app/ui/), **API docs** at
+[`/docs`](https://model-serving-548930096299.us-central1.run.app/docs). Real models, real
+inference, nothing pre-recorded. Start on the **Manual** tab.
+
+---
 
 A production-grade model deployment system built around the question every ML engineering interview asks:
 
@@ -13,7 +22,43 @@ This project implements the full answer: shadow mode validation, canary progress
 
 Tests run without downloading model weights: the API suite replaces the loader with stubs, so CI finishes in seconds and never depends on the HuggingFace Hub being reachable.
 
-**Live demo: [model-serving on Cloud Run](https://model-serving-548930096299.us-central1.run.app)** — control panel at `/ui`, API docs at `/docs`.
+---
+
+## The control panel
+
+Three static files in `web/` — no framework, no build step — served by the same
+FastAPI process at `/ui`. One container, one origin, no CORS, nothing in the
+deployment that can expire.
+
+Seven tabs in the order you would actually use them: **Manual · Predict ·
+Comparison · Rollout · Drift · Cache · Audit**. Colour carries meaning rather
+than decoration and keeps the same meaning on every tab — teal is traffic,
+magenta is the gap between the two models, violet is latency, yellow is cache —
+with green/amber/red kept separate for threshold status.
+
+Three things it is deliberately honest about, because each one is a question an
+interviewer will ask:
+
+**There is no ground truth.** Nothing in the serving path knows the right answer
+to anything; production traffic arrives unlabelled. That is precisely why the
+monitoring here is built on *disagreement* and *drift* — both work without
+labels, and accuracy does not. The panel says so rather than letting a big
+confident verdict imply it has been checked.
+
+**The model is wrong sometimes, and you can watch it happen.** A **⚠ Ones it
+gets wrong** sample set holds 15 sentences verified against this live service and
+answered incorrectly, most above 99% confidence — sarcasm, negation, contrast,
+and good news phrased without a positive word. They are labelled as hand-picked
+failures and excluded from the random picker, so the default experience is not
+skewed. They exist to make the point the rollout machinery is built on:
+*a confident answer and a correct answer are not the same thing*, and every
+safety check on the page measures something other than being right.
+
+**Your input is never stored server-side.** The comparison list shows each
+sentence to the person who sent it without the server keeping any text: the
+monitor records the request's `trace_id`, and the browser keeps its own
+`trace_id → text` map in `sessionStorage`. Whoever sent a request holds both
+halves; everyone else sees a row that says so.
 
 ---
 
@@ -292,6 +337,9 @@ Shadow mode. v2 runs on every request but results are discarded. Zero user impac
 
 **"How do you know when to promote from shadow to canary?"**
 Disagreement rate < 5% is the behavioral signal. Evidently drift score < threshold confirms the canary inputs match the shadow inputs. Both signals together mean v2 is ready.
+
+**"How can you validate a model in production when you have no labels?"**
+You cannot measure accuracy, so you measure everything else. Production traffic arrives unlabelled and the correct answer may never arrive at all, which rules out accuracy as a release gate. Disagreement rate needs no labels — it asks whether the new model behaves like the one already trusted. Drift needs no labels — it asks whether the traffic still resembles what either model was measured on. Error rate and latency need no labels. That is the entire monitoring strategy here, and it is a deliberate consequence of the constraint rather than a gap. The live panel demonstrates the sharp edge of it: a set of sample sentences the model answers **wrongly at over 99% confidence**, on which v1 and v2 agree perfectly. Every signal in this system reads clean on those inputs. Confidence is not correctness, and agreement is not correctness — they are the best proxies available without an answer key, and knowing what they cannot see is the point.
 
 **"What triggers automatic rollback?"**
 Two independent signals: error rate > 5% OR p99 latency > 2× v1 p99. The threshold is configurable. The minimum request count (20) prevents rollback from noise on the first few requests.
