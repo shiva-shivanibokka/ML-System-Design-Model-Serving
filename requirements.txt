@@ -27,12 +27,13 @@ pandas==2.2.2
 redis==5.0.4
 
 # ── Database (audit log) ──────────────────────────────────────────────────────
-sqlalchemy==2.0.30
-psycopg2-binary==2.9.9
+# sqlalchemy / psycopg2-binary removed: the PostgreSQL audit sink was
+# dropped (see api/main.py) and nothing imports them.
 
 # ── UI ───────────────────────────────────────────────────────────────────────
-gradio==4.36.1
-plotly==5.22.0
+# gradio / plotly removed: the Gradio UI was replaced by web/ and nothing
+# imports either. gradio 4.36.1 was also a year-old pin carrying known
+# advisories, installed by the documented local path and used by nothing.
 
 # ── Config ───────────────────────────────────────────────────────────────────
 pyyaml==6.0.1

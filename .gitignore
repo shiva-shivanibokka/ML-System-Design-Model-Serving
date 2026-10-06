@@ -44,3 +44,11 @@ Thumbs.db
 # Publishing a plan that still lists intended-but-unbuilt work reads as a list
 # of gaps rather than a record of decisions. Kept locally, out of the repo.
 docs/superpowers/
+
+# Coverage data. This was tracked, and a .coverage file embeds ABSOLUTE paths
+# of every measured source file -- it was publishing the author's Windows
+# username and OneDrive layout in 19 rows.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

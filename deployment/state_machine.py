@@ -19,7 +19,9 @@ Transitions:
 Every transition is logged to:
   1. In-memory audit log (last N entries)
   2. JSONL file on disk (audit_log/transitions.jsonl)
-  3. PostgreSQL audit table (async, non-blocking)
+  (A PostgreSQL audit table used to be listed here. Postgres was removed from
+   this project -- see api/main.py -- so the structured log and the JSONL file
+   are the only sinks.)
   4. Prometheus counter (deployment_transitions_total)
 
 State persistence:
@@ -345,20 +347,29 @@ class DeploymentStateMachine:
     def record_request(
         self,
         model_used: str,
-        latency_ms: float,
+        latency_ms: float | None,
         error: bool,
     ) -> None:
         """
         Update per-version request counters and latency windows.
         Also checks rollback thresholds after each v2 request.
+
+        latency_ms may be None for a call that produced no timing -- an error or
+        a cache hit. The request is still counted, but nothing is appended to the
+        latency window. Passing 0.0 instead, as the error path used to, pushed a
+        zero into the v2 distribution and so DEFLATED v2's p99 exactly when v2
+        was failing most, making the latency-based rollback least likely to fire
+        when it was most needed.
         """
         with self._lock:
             self._total_requests += 1
             if model_used == "v1":
-                self._v1_latencies.append(latency_ms)
+                if latency_ms is not None:
+                    self._v1_latencies.append(latency_ms)
             elif model_used == "v2":
                 self._v2_requests += 1
-                self._v2_latencies.append(latency_ms)
+                if latency_ms is not None:
+                    self._v2_latencies.append(latency_ms)
                 if error:
                     self._v2_errors += 1
                 # Check rollback thresholds after recording
@@ -411,8 +422,7 @@ class DeploymentStateMachine:
                 to_state=DeploymentState.ROLLED_BACK,
                 trigger="auto_rollback_latency",
                 note=(
-                    f"v2 p99 {v2_p99:.1f}ms > {cfg.latency_p99_multiplier}x "
-                    f"v1 p99 {v1_p99:.1f}ms"
+                    f"v2 p99 {v2_p99:.1f}ms > {cfg.latency_p99_multiplier}x v1 p99 {v1_p99:.1f}ms"
                 ),
             )
 
@@ -563,34 +573,86 @@ class DeploymentStateMachine:
                 if current not in AUTO_PROGRESSION_DURATIONS:
                     continue
 
-                # Has there been a rollback? Skip.
-                if current == DeploymentState.ROLLED_BACK:
-                    continue
-
                 duration_required = AUTO_PROGRESSION_DURATIONS[current]
                 time_in_state = time.monotonic() - self._state_entered_at
 
-                if time_in_state >= duration_required:
-                    try:
-                        idx = PROGRESSION_ORDER.index(current)
-                        next_state = PROGRESSION_ORDER[idx + 1]
-                    except (ValueError, IndexError):
-                        continue
+                if time_in_state < duration_required:
+                    continue
 
-                    log.info(
-                        "auto_progression_eligible",
+                # Elapsed time is NOT evidence of health. This loop used to
+                # check the clock and nothing else, then write "Auto-promoted
+                # after Ns clean run" into the audit log. A canary failing 100%
+                # of its requests promoted itself, with the log asserting it had
+                # run cleanly. Ask for evidence before claiming any.
+                blocked_by = self._auto_progression_blockers()
+                if blocked_by:
+                    log.warning(
+                        "auto_progression_blocked",
                         current=current.value,
-                        next=next_state.value,
+                        reasons=blocked_by,
                         time_in_state_s=round(time_in_state, 1),
                     )
-                    self._transition(
-                        to_state=next_state,
-                        trigger="auto_promote",
-                        note=(
-                            f"Auto-promoted after {time_in_state:.0f}s clean run "
-                            f"(required {duration_required}s)"
-                        ),
-                    )
+                    continue
+
+                try:
+                    idx = PROGRESSION_ORDER.index(current)
+                    next_state = PROGRESSION_ORDER[idx + 1]
+                except (ValueError, IndexError):
+                    continue
+
+                log.info(
+                    "auto_progression_eligible",
+                    current=current.value,
+                    next=next_state.value,
+                    time_in_state_s=round(time_in_state, 1),
+                    v2_requests=self._v2_requests,
+                    v2_error_rate=round(self._v2_error_rate(), 4),
+                )
+                self._transition(
+                    to_state=next_state,
+                    trigger="auto_promote",
+                    note=(
+                        f"Auto-promoted after {time_in_state:.0f}s "
+                        f"({self._v2_requests} v2 requests, error rate "
+                        f"{self._v2_error_rate():.3f}, required {duration_required}s)"
+                    ),
+                )
+
+    def _v2_error_rate(self) -> float:
+        return self._v2_errors / self._v2_requests if self._v2_requests else 0.0
+
+    def _auto_progression_blockers(self) -> list[str]:
+        """Reasons the current stage must not auto-promote. Empty means clear.
+
+        Must be called while holding self._lock.
+
+        The thresholds are the ones the rollback check already uses, so a stage
+        cannot promote through a condition that would have rolled it back. The
+        minimum-request gate matters most: without a sample, a stage carrying no
+        v2 traffic at all is indistinguishable from a healthy one -- which is
+        exactly the situation the cache defect created.
+        """
+        cfg = settings.deployment.rollback
+        blockers: list[str] = []
+
+        if self._v2_requests < cfg.min_requests_before_check:
+            blockers.append(
+                f"only {self._v2_requests} v2 requests observed, "
+                f"need {cfg.min_requests_before_check}"
+            )
+            return blockers
+
+        error_rate = self._v2_error_rate()
+        if error_rate > cfg.error_rate_threshold:
+            blockers.append(f"v2 error rate {error_rate:.3f} exceeds {cfg.error_rate_threshold}")
+
+        v2_p99 = self._percentile(self._v2_latencies, 99)
+        v1_p99 = self._percentile(self._v1_latencies, 99)
+        if v1_p99 > 0 and v2_p99 > v1_p99 * cfg.latency_p99_multiplier:
+            blockers.append(
+                f"v2 p99 {v2_p99:.1f}ms exceeds {cfg.latency_p99_multiplier}x v1 p99 {v1_p99:.1f}ms"
+            )
+        return blockers
 
     @staticmethod
     def _percentile(data: deque[float], p: int) -> float:

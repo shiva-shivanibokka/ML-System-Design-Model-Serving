@@ -211,3 +211,84 @@ def test_panel_is_served_and_root_redirects_to_it(client):
     r = client.get("/", follow_redirects=False)
     assert r.status_code in (307, 308)
     assert r.headers["location"] == "/ui/"
+
+
+def _force_state(main, target: str):
+    """Walk the state machine to `target` by promoting, without the auto timer."""
+    from deployment.state_machine import DeploymentState
+
+    seen = set()
+    while main.state_machine.state.value != target:
+        before = main.state_machine.state.value
+        if before in seen:
+            raise AssertionError(f"cannot reach {target}, stuck at {before}")
+        seen.add(before)
+        main.state_machine.promote(triggered_by="test")
+    assert main.state_machine.state is DeploymentState(target)
+
+
+# ---------------------------------------------------------------------------
+# The cache must not cancel the deployment machinery
+#
+# These three pin the defect that made the whole project misreport itself: the
+# cache check in api.main returned before request_router.route() was ever
+# called, so on a cache hit the canary draw did not happen, v2 never ran in
+# shadow, and neither the disagreement monitor nor the drift detector saw the
+# request. Measured before the fix, at a 50% canary split, 40 identical
+# requests put ZERO traffic on v2 while /metrics reported a 0.5 fraction.
+# ---------------------------------------------------------------------------
+
+
+def test_cache_hits_still_honour_the_canary_split(client):
+    """A repeated input must still be split across versions."""
+    import api.main as main
+
+    _force_state(main, "canary_50")
+    payload = {"text": "the same sentence every time"}
+
+    versions = set()
+    for _ in range(60):
+        body = client.post("/predict", json=payload).json()
+        versions.add(body["model_used"])
+
+    assert "v2" in versions, (
+        f"60 requests at a 50% canary split never reached v2 (saw {versions}). "
+        "The cache is returning before the router draws."
+    )
+
+
+def test_shadow_mode_runs_v2_even_when_the_answer_is_cached(client):
+    """Shadow mode compares v1 and v2 on every request, cached or not."""
+    import api.main as main
+
+    _force_state(main, "shadow")
+    payload = {"text": "shadow mode should always compare"}
+
+    client.post("/predict", json=payload)  # populates the cache
+    before = main.disagreement_monitor.get_stats()["total_comparisons"]
+    for _ in range(5):
+        client.post("/predict", json=payload)  # all cache hits
+    after = main.disagreement_monitor.get_stats()["total_comparisons"]
+
+    assert after - before == 5, (
+        f"5 cached requests in shadow produced {after - before} comparisons, expected 5. "
+        "v2 is not running on cache hits, so the shadow comparison is sampling "
+        "only cache misses."
+    )
+
+
+def test_drift_detector_sees_cached_requests_too(client):
+    """Drift is about the input distribution, which does not care about caching."""
+    import api.main as main
+
+    payload = {"text": "drift should count every request"}
+    client.post("/predict", json=payload)
+    before = main.drift_detector.get_status()["total_records"]
+    for _ in range(5):
+        client.post("/predict", json=payload)
+    after = main.drift_detector.get_status()["total_records"]
+
+    assert after - before == 5, (
+        f"5 cached requests recorded {after - before} drift samples, expected 5. "
+        "The reference window is being built from cache misses only."
+    )

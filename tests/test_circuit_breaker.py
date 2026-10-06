@@ -52,10 +52,24 @@ def test_success_resets_the_failure_run(breaker: CircuitBreaker):
         with pytest.raises(RuntimeError):
             breaker.call(_boom)
     breaker.call(_ok)
+
+    # The run must start over, so (threshold - 1) more failures still leave it
+    # closed. Asserting only CLOSED after ONE further failure was true under the
+    # old decrement-by-one behaviour too, so the test named for this claim could
+    # not detect the difference: after 4 failures and 1 success the counter sat
+    # at 3, and two more failures opened the breaker where a real reset needs
+    # five.
+    for _ in range(threshold - 1):
+        with pytest.raises(RuntimeError):
+            breaker.call(_boom)
+    assert breaker.state is CircuitState.CLOSED, (
+        "a success did not reset the consecutive-failure run"
+    )
+
+    # ...and the very next failure, the threshold-th of the new run, opens it.
     with pytest.raises(RuntimeError):
         breaker.call(_boom)
-
-    assert breaker.state is CircuitState.CLOSED
+    assert breaker.state is CircuitState.OPEN
 
 
 def test_open_blocks_calls_without_invoking_them(breaker: CircuitBreaker):
@@ -135,3 +149,35 @@ def test_status_payload_shape(breaker: CircuitBreaker):
         "thresholds",
     ):
         assert key in status, f"missing {key}"
+
+
+def test_a_hanging_call_times_out_and_counts_as_a_failure(breaker: CircuitBreaker):
+    """call_timeout_seconds must actually bound the call.
+
+    It was loaded from config and never read: a 7-second call under a 5-second
+    timeout returned normally, failures stayed at 0 and the breaker stayed
+    closed. The breaker's own docstring builds its justification on this timeout
+    ("Every request waits call_timeout_seconds before falling back to v1"), so
+    the single failure mode it exists to catch -- a hung v2 -- was the one it
+    could not see.
+    """
+    import time
+
+    from deployment.circuit_breaker import CircuitBreakerTimeoutError
+
+    budget = breaker._call_timeout
+    assert budget and budget > 0, "this test needs a configured timeout"
+
+    t0 = time.perf_counter()
+    with pytest.raises(CircuitBreakerTimeoutError):
+        breaker.call(lambda: time.sleep(budget * 2) or "never returned")
+    elapsed = time.perf_counter() - t0
+
+    # The caller must not wait for the hung call to finish.
+    assert elapsed < budget * 1.8, (
+        f"caller waited {elapsed:.1f}s for a {budget}s timeout -- "
+        "the executor is blocking on shutdown"
+    )
+    assert breaker.get_status()["failure_count"] >= 1, (
+        "a timed-out call must count as a failure, or the breaker can never open on a hang"
+    )

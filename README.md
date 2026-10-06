@@ -1,26 +1,26 @@
 # ML System Design: Production Model Serving
 
 > [!IMPORTANT]
-> **The hosted demo is temporary.** This project's backend runs on Google Cloud
-> Run under a Google Cloud free trial that ends **around 19 September 2026**.
-> When the trial closes the service is stopped, and every `run.app` link below
-> stops responding.
+> **The hosted demo is switched off.** It ran on Google Cloud Run under a free
+> trial whose billing account has since been closed. The service now returns
+> HTTP 503 and every `run.app` link is dead.
 >
-> Nothing in this repository depends on that. The code, tests and results are
-> complete, and the instructions below run the whole thing locally.
+> Nothing in this repository depends on it. **Run it locally** with the
+> quickstart below -- two commands, no cloud account, and the control panel,
+> the canary machinery and the monitoring all work exactly as they did hosted.
 
 
 [![CI](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml/badge.svg)](https://github.com/shiva-shivanibokka/ML-System-Design-Model-Serving/actions/workflows/ci.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-71-brightgreen)
+![Tests](https://img.shields.io/badge/tests-78-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen)
 
-### ▶ [Open the live demo](https://model-serving-548930096299.us-central1.run.app)
+### Run it locally
 
-Running on Cloud Run — **control panel** at
-[`/ui`](https://model-serving-548930096299.us-central1.run.app/ui/), **API docs** at
-[`/docs`](https://model-serving-548930096299.us-central1.run.app/docs). Real models, real
-inference, nothing pre-recorded. Start on the **Manual** tab.
+The hosted demo is gone (see the note above). Everything it showed runs on one
+machine: the control panel at `/ui/`, the API docs at `/docs`, real DistilBERT
+inference, and the full shadow -> canary -> full deployment flow with its
+monitoring. See **Quickstart** below. Start on the **Manual** tab.
 
 ---
 
@@ -28,7 +28,7 @@ A production-grade model deployment system built around the question every ML en
 
 > **"You have a new model. How do you deploy it without breaking production?"**
 
-This project implements the full answer: shadow mode validation, canary progressive delivery, circuit breaker failover, Evidently AI drift detection, disagreement rate monitoring, and a complete audit trail — all wired into a real FastAPI serving layer with Redis, Prometheus, Grafana, and Docker.
+This project implements the full answer: shadow mode validation, canary progressive delivery, circuit breaker failover, input-drift detection, disagreement rate monitoring, and a complete audit trail — all wired into a real FastAPI serving layer with Redis, Prometheus, Grafana, and Docker.
 
 Tests run without downloading model weights: the API suite replaces the loader with stubs, so CI finishes in seconds and never depends on the HuggingFace Hub being reachable.
 
@@ -74,7 +74,7 @@ halves; everyone else sees a row that says so.
 
 ## Running it hosted
 
-The full stack is six containers. The hosted demo is one, and the difference is
+The full stack is four containers (redis, gateway, prometheus, grafana), plus a fifth, locust, behind the `load-test` profile. The hosted demo is one, and the difference is
 deliberate — see [Hosted vs. local](#hosted-vs-local) for what changes and why.
 
 Two things about the hosted instance are worth knowing before you click:
@@ -154,7 +154,7 @@ that gets wiped would not have made it durable, only quietly inconsistent.
 | "What if v2 starts failing?" | Auto-rollback: triggers if v2 error_rate > 5% OR p99 > 2× v1 p99 |
 | "What if v2 crashes entirely?" | Circuit breaker: OPEN state returns v1 in <1ms (fail-fast) |
 | "Are v1 and v2 actually the same model?" | Disagreement rate: tracks % of shadow requests where labels differ |
-| "Are canary inputs different from training?" | Evidently AI drift: Jensen-Shannon divergence on text length + confidence |
+| "Has the input distribution moved since this instance started?" | Jensen-Shannon divergence on text length + confidence, against the first 200 requests this process served |
 | "Why did this request take 800ms?" | Trace IDs: X-Trace-ID flows through every component and log line |
 | "Why is v2 slow on the first request?" | Warm-up: 10 dummy inferences post-load, /ready only flips after warm-up |
 | "What happened when v2 was rolled back?" | Audit log: every transition recorded with the metrics as they stood, in memory and appended to JSONL |
@@ -165,8 +165,8 @@ that gets wiped would not have made it durable, only quietly inconsistent.
 
 | Version | Architecture | Precision | Expected CPU Latency |
 |---|---|---|---|
-| v1 | DistilBERT SST-2 fine-tuned | FP32 (full precision) | 30-80ms |
-| v2 | Same weights, INT8 dynamic quantization | INT8 (quantized) | 20-55ms (~30% faster) |
+| v1 | DistilBERT SST-2 fine-tuned | FP32 (full precision) | p50 33ms, p99 64ms |
+| v2 | Same weights, INT8 dynamic quantization | INT8 (quantized) | p50 25ms, p99 29ms (~20% faster) |
 
 **Why INT8 quantization as v2?**
 It's the most common real-world "v2" scenario: same model architecture, different serving optimization. INT8 produces slightly different confidence scores even when the label agrees — this makes shadow disagreement monitoring meaningful and demonstrates a real divergence between versions.
@@ -182,14 +182,14 @@ It's the most common real-world "v2" scenario: same model architecture, differen
 | Deployment state | In-memory state machine + Redis persistence |
 | Traffic routing | Weighted random routing (deployment/router.py) |
 | Circuit breaker | Custom implementation (deployment/circuit_breaker.py) |
-| Drift detection | Evidently AI DataDriftPreset + scipy Jensen-Shannon fallback |
+| Drift detection | scipy Jensen-Shannon divergence over text length and confidence |
 | Disagreement monitoring | Rolling window tracker (monitoring/disagreement.py) |
 | Caching | Redis (hash-keyed, per-version, TTL=300s) |
-| Metrics | Prometheus (prometheus_client) + Grafana dashboards |
+| Metrics | Prometheus (`prometheus_client`); a Grafana container is provisioned to scrape it |
 | Structured logging | structlog (JSON, trace_id-bound) |
 | Audit trail | In-memory ring buffer + JSONL append (no database) |
 | Load testing | Locust (canary-aware per-version latency breakdown) |
-| Containerization | Docker + docker-compose (5 services) |
+| Containerization | Docker + docker-compose (4 services, plus locust under a profile) |
 | Control panel | Static HTML/CSS/JS, no build step, served by FastAPI at `/ui` |
 
 ---
@@ -314,7 +314,7 @@ curl http://localhost:8000/deployment/audit
 | GET | `/deployment/audit` | State transition history |
 | GET | `/monitoring/disagreement` | Shadow mode v1/v2 disagreement stats |
 | GET | `/monitoring/disagreement/comparisons` | Every recent comparison, agreements included, with a `trace_id` and no input text |
-| GET | `/monitoring/drift` | Evidently drift detection status |
+| GET | `/monitoring/drift` | Input-drift status (Jensen-Shannon divergence) |
 | GET | `/monitoring/cache` | Redis cache hit/miss stats |
 | GET | `/circuit-breaker/status` | Circuit breaker state |
 | POST | `/circuit-breaker/reset` | Manually close circuit |
@@ -346,7 +346,7 @@ curl http://localhost:8000/deployment/audit
 Shadow mode. v2 runs on every request but results are discarded. Zero user impact. You accumulate behavioral data (disagreement rate, confidence distributions) before any user ever sees v2.
 
 **"How do you know when to promote from shadow to canary?"**
-Disagreement rate < 5% is the behavioral signal. Evidently drift score < threshold confirms the canary inputs match the shadow inputs. Both signals together mean v2 is ready.
+Disagreement rate < 5% is the behavioral signal. A drift score below threshold confirms the canary inputs resemble the shadow inputs. Both signals together mean v2 is ready.
 
 **"How can you validate a model in production when you have no labels?"**
 You cannot measure accuracy, so you measure everything else. Production traffic arrives unlabelled and the correct answer may never arrive at all, which rules out accuracy as a release gate. Disagreement rate needs no labels — it asks whether the new model behaves like the one already trusted. Drift needs no labels — it asks whether the traffic still resembles what either model was measured on. Error rate and latency need no labels. That is the entire monitoring strategy here, and it is a deliberate consequence of the constraint rather than a gap. The live panel demonstrates the sharp edge of it: a set of sample sentences the model answers **wrongly at over 99% confidence**, on which v1 and v2 agree perfectly. Every signal in this system reads clean on those inputs. Confidence is not correctness, and agreement is not correctness — they are the best proxies available without an answer key, and knowing what they cannot see is the point.
@@ -367,8 +367,8 @@ Thompson Sampling in RecSys optimizes which model to use based on click-through 
 
 ## Hosted vs. local
 
-`docker-compose up` runs the architecture as designed: five containers, real
-Redis, Prometheus scraping, Grafana dashboards. The hosted demo runs one
+`docker-compose up` runs the architecture as designed: four containers, real
+Redis and Prometheus scraping. The hosted demo ran one
 container with no attached services, which changes three things. All three are
 reported by the API rather than assumed, so you can tell from outside which
 mode you are looking at.
@@ -377,7 +377,7 @@ mode you are looking at.
 |---|---|---|
 | **Cache** | Redis | In-process dict with the same TTL. `GET /health` reports `cache_backend`, and `redis_available` stays `false` — the fallback keeps the feature working but is never described as Redis. |
 | **Deployment state** | JSON + JSONL on a volume | In memory. `state_durability: "ephemeral"` on `/deployment/status`. The in-memory audit log at `/deployment/audit` is unaffected. |
-| **Drift detection** | Evidently | scipy Jensen-Shannon divergence. `/monitoring/drift` reports `method`, so which path ran is visible. Evidently pulls ~400MB of transitive dependencies for a number `monitoring/drift.py` already computes without it. |
+| **Drift detection** | scipy Jensen-Shannon divergence | Identical in both. There used to be an optional Evidently path, but its `drift_score` is a K-S p-value and it was stored in the same field as the Jensen-Shannon divergence -- so identical distributions scored 1.0 where the other path scores 0. It was removed rather than repaired: it had no test coverage and `requirements-serve.txt` never installed it, so it was never the path that actually shipped. |
 
 Two smaller deployment details are load-bearing:
 
