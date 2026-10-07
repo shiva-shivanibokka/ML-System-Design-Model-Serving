@@ -62,9 +62,9 @@ def test_success_resets_the_failure_run(breaker: CircuitBreaker):
     for _ in range(threshold - 1):
         with pytest.raises(RuntimeError):
             breaker.call(_boom)
-    assert breaker.state is CircuitState.CLOSED, (
-        "a success did not reset the consecutive-failure run"
-    )
+    assert (
+        breaker.state is CircuitState.CLOSED
+    ), "a success did not reset the consecutive-failure run"
 
     # ...and the very next failure, the threshold-th of the new run, opens it.
     with pytest.raises(RuntimeError):
@@ -178,6 +178,6 @@ def test_a_hanging_call_times_out_and_counts_as_a_failure(breaker: CircuitBreake
         f"caller waited {elapsed:.1f}s for a {budget}s timeout -- "
         "the executor is blocking on shutdown"
     )
-    assert breaker.get_status()["failure_count"] >= 1, (
-        "a timed-out call must count as a failure, or the breaker can never open on a hang"
-    )
+    assert (
+        breaker.get_status()["failure_count"] >= 1
+    ), "a timed-out call must count as a failure, or the breaker can never open on a hang"
