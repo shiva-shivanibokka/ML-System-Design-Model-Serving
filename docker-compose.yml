@@ -19,7 +19,6 @@
 #   Grafana:       http://localhost:3000  (admin / admin)
 #   Locust:        http://localhost:8089  (start load test manually)
 
-version: "3.9"
 
 # ---------------------------------------------------------------------------
 # Shared network
@@ -48,7 +47,12 @@ services:
     container_name: ms_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Not published to the host. Nothing outside the compose network needs
+      # it, and binding 6379 made `docker compose up` fail outright whenever
+      # any other Redis was running -- after which the gateway came up
+      # 'healthy' on its in-process cache, quietly making the README's
+      # 'real Redis' row false with no error anywhere but /health.
+      # - "6379:6379"
     command: >
       redis-server
       --maxmemory 256mb
@@ -131,7 +135,13 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/model-serving.json
+      # No default home dashboard is set. This used to point at
+      # /var/lib/grafana/dashboards/model-serving.json, a file that does not
+      # exist in this repo -- monitoring/grafana/dashboards/ is empty and
+      # untracked -- so Grafana came up with a broken home dashboard while
+      # the README claimed 'Grafana dashboards'. Grafana still scrapes
+      # Prometheus; build a dashboard in the UI, or commit one here and
+      # restore this line.
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro

@@ -11,15 +11,23 @@ What we monitor:
      A shift here means different types of content are being submitted.
      (e.g. model trained on tweets, now receiving full articles)
 
-  2. CONFIDENCE SCORE DISTRIBUTION — is v2 systematically less/more confident
-     than v1 on the same inputs?
-     A shift here means the model has different calibration.
+  2. CONFIDENCE SCORE DISTRIBUTION — has the SERVING model's confidence moved
+     since the reference window?
+     This used to say "is v2 systematically less/more confident than v1 on the
+     same inputs", which this detector cannot answer: api/main.py records only
+     the user-facing result's score, so in shadow mode v2's confidence never
+     reaches it. The v1-vs-v2 comparison lives in monitoring/disagreement.py.
+     A shift here means the model's calibration has moved.
      (Important for any system using confidence thresholds downstream)
 
 How it works:
-  - Reference window: first N requests (captured as training distribution baseline)
+  - Reference window: the first N requests THIS PROCESS SERVED. It is NOT the
+    training distribution — nothing here has access to the SST-2 training set at
+    serving time. What this detects is "the inputs have moved since this instance
+    started", which is useful but a different claim. It also re-baselines on every
+    restart, so a scale-to-zero deployment anchors on whatever arrives first.
   - Detection window: rolling window of most recent M requests
-  - Every K requests, run Evidently DataDriftPreset
+  - Every K requests, compare the two windows
   - If Jensen-Shannon divergence > threshold → flag drift, update Prometheus gauge
 
 Evidently AI:
@@ -47,19 +55,24 @@ from configs.settings import settings
 
 log = structlog.get_logger(__name__)
 
-# Optional import — fall back gracefully. These names look unused to a linter
-# because the import itself is the test: they are re-imported inside
-# _check_with_evidently, and this block only decides which path runs.
-try:
-    import pandas as pd  # noqa: F401
-    from evidently import ColumnMapping  # noqa: F401
-    from evidently.metric_preset import DataDriftPreset  # noqa: F401
-    from evidently.report import Report  # noqa: F401
-
-    EVIDENTLY_AVAILABLE = True
-except ImportError:
-    EVIDENTLY_AVAILABLE = False
-    log.info("evidently_not_installed", fallback="scipy_js_divergence")
+# There used to be an optional Evidently path here, chosen whenever the package
+# happened to be importable. It was removed because it silently inverted the
+# metric.
+#
+# Evidently's `drift_score` for a numeric column is a K-S **p-value**, and it was
+# being stored in the same field as this module's Jensen-Shannon **divergence**.
+# Measured with evidently==0.4.30 installed: identical distributions scored 1.0
+# and completely shifted distributions scored 0.0 -- exactly backwards from the
+# scipy path, where 0 means identical. Downstream, web/app.js drew the bar as
+# score/limit and its tooltip said "0 means identical", so the dashboard pinned
+# both drift bars at 100% when there was no drift, and any Prometheus alert on
+# `model_serving_drift_score > 0.1` fired permanently.
+#
+# Two further reasons not to repair it in place: the branch had 0% test coverage,
+# and requirements-serve.txt (the file the Docker image and Cloud Run actually
+# installed) deliberately excludes Evidently -- so the path that shipped was
+# never the path this code preferred. One metric, defined one way, is worth more
+# here than two that disagree about their own sign.
 
 try:
     from scipy.spatial.distance import jensenshannon
@@ -158,9 +171,7 @@ class DriftDetector:
         cur_lengths = list(self._current_text_lengths)
         cur_confs = list(self._current_confidences)
 
-        if EVIDENTLY_AVAILABLE:
-            return self._check_with_evidently(ref_lengths, ref_confs, cur_lengths, cur_confs)
-        elif SCIPY_AVAILABLE:
+        if SCIPY_AVAILABLE:
             return self._check_with_js_divergence(ref_lengths, ref_confs, cur_lengths, cur_confs)
         else:
             return DriftCheckResult(
@@ -174,68 +185,6 @@ class DriftDetector:
                 any_drift=False,
                 method="unavailable",
             )
-
-    def _check_with_evidently(
-        self, ref_lengths, ref_confs, cur_lengths, cur_confs
-    ) -> DriftCheckResult:
-        """Run Evidently DataDriftPreset on text length and confidence features."""
-        try:
-            import pandas as pd
-            from evidently.metric_preset import DataDriftPreset
-            from evidently.report import Report
-
-            ref_df = pd.DataFrame(
-                {
-                    "text_length": ref_lengths,
-                    "confidence": ref_confs,
-                }
-            )
-            cur_df = pd.DataFrame(
-                {
-                    "text_length": cur_lengths,
-                    "confidence": cur_confs,
-                }
-            )
-
-            report = Report(metrics=[DataDriftPreset()])
-            report.run(reference_data=ref_df, current_data=cur_df)
-            result_dict = report.as_dict()
-
-            # Extract per-feature drift scores from Evidently result
-            metrics = result_dict.get("metrics", [])
-            text_score = 0.0
-            conf_score = 0.0
-            text_drifted = False
-            conf_drifted = False
-
-            for metric in metrics:
-                result = metric.get("result", {})
-                drift_by_columns = result.get("drift_by_columns", {})
-
-                if "text_length" in drift_by_columns:
-                    col = drift_by_columns["text_length"]
-                    text_score = col.get("drift_score", 0.0)
-                    text_drifted = col.get("drift_detected", False)
-
-                if "confidence" in drift_by_columns:
-                    col = drift_by_columns["confidence"]
-                    conf_score = col.get("drift_score", 0.0)
-                    conf_drifted = col.get("drift_detected", False)
-
-            return DriftCheckResult(
-                checked_at_request_n=self._total_records,
-                reference_size=len(ref_lengths),
-                current_size=len(cur_lengths),
-                text_length_drift_score=round(text_score, 4),
-                confidence_drift_score=round(conf_score, 4),
-                text_length_drifted=text_drifted,
-                confidence_drifted=conf_drifted,
-                any_drift=text_drifted or conf_drifted,
-                method="evidently",
-            )
-        except Exception as e:
-            log.warning("evidently_check_failed", error=str(e), fallback="scipy")
-            return self._check_with_js_divergence(ref_lengths, ref_confs, cur_lengths, cur_confs)
 
     def _check_with_js_divergence(
         self, ref_lengths, ref_confs, cur_lengths, cur_confs

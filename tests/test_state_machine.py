@@ -212,3 +212,55 @@ def test_every_state_has_a_traffic_fraction(state, state_machine):
 
     assert state in V2_TRAFFIC_FRACTION
     assert 0.0 <= V2_TRAFFIC_FRACTION[state] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Auto-progression must require evidence, not just elapsed time
+#
+# The loop used to check the clock and nothing else, then write "Auto-promoted
+# after Ns clean run" into the audit log. Measured before the fix: a canary_5
+# with 19 consecutive v2 failures auto-promoted to canary_25, and the audit note
+# claimed a clean run. The negative cases below are the point -- a gate that only
+# has passing tests is not a gate.
+# ---------------------------------------------------------------------------
+
+
+def test_auto_progression_is_blocked_by_a_failing_canary():
+    sm = DeploymentStateMachine()
+    sm.reset()
+    sm.promote(triggered_by="test")  # baseline -> shadow
+    sm.promote(triggered_by="test")  # shadow -> canary_5
+
+    cfg = settings.deployment.rollback
+    for _ in range(cfg.min_requests_before_check):
+        sm.record_request("v2", 10.0, error=True)
+
+    blockers = sm._auto_progression_blockers()
+    assert blockers, "a canary failing every request must not be eligible to promote"
+    assert any("error rate" in b for b in blockers), blockers
+
+
+def test_auto_progression_is_blocked_before_enough_v2_traffic():
+    """No sample is not the same as a healthy sample."""
+    sm = DeploymentStateMachine()
+    sm.reset()
+    sm.promote(triggered_by="test")
+    sm.promote(triggered_by="test")
+
+    blockers = sm._auto_progression_blockers()
+    assert blockers, "a stage with zero v2 traffic must not look healthy"
+    assert any("v2 requests observed" in b for b in blockers), blockers
+
+
+def test_auto_progression_is_allowed_when_the_canary_is_actually_healthy():
+    sm = DeploymentStateMachine()
+    sm.reset()
+    sm.promote(triggered_by="test")
+    sm.promote(triggered_by="test")
+
+    cfg = settings.deployment.rollback
+    for _ in range(cfg.min_requests_before_check):
+        sm.record_request("v1", 10.0, error=False)
+        sm.record_request("v2", 9.0, error=False)
+
+    assert sm._auto_progression_blockers() == []

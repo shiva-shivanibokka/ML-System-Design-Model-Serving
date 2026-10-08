@@ -119,10 +119,7 @@ def print_canary_report(environment, **kwargs):
             p50 = statistics.median(lats) if lats else 0.0
             p95 = lats[int(len(lats) * 0.95)] if len(lats) > 1 else 0.0
             p99 = lats[int(len(lats) * 0.99)] if len(lats) > 1 else 0.0
-            print(
-                f"{version:<25} {count:>8,} {share:>8.1%} "
-                f"{p50:>10.1f} {p95:>10.1f} {p99:>10.1f}"
-            )
+            print(f"{version:<25} {count:>8,} {share:>8.1%} {p50:>10.1f} {p95:>10.1f} {p99:>10.1f}")
 
         print("=" * 60)
 

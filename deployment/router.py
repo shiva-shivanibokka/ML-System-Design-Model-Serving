@@ -94,10 +94,20 @@ class RequestRouter:
         self, text: str, trace_id: str
     ) -> tuple[PredictionResult, PredictionResult | None, str]:
         """
-        Shadow mode: v1 is primary, v2 runs silently in background.
+        Shadow mode: v1 is primary, v2 runs on the same input for comparison.
 
-        v2 is dispatched as a non-blocking asyncio task AFTER v1 responds.
-        The user never waits for v2. If v2 fails, it's logged silently.
+        CORRECTNESS impact on the user is zero -- the response is always v1's.
+        LATENCY impact is not zero, and this docstring used to claim otherwise
+        ("dispatched as a non-blocking asyncio task AFTER v1 responds. The user
+        never waits for v2"). The call below is awaited sequentially after v1, so
+        a shadow request costs both inferences: roughly 33ms + 25ms measured on
+        CPU, not 33ms. Making it genuinely non-blocking would mean returning the
+        response before v2 is dispatched, which FastAPI supports via a
+        BackgroundTask; that is a real change, not a comment fix, and it is not
+        made here. The honest statement is: shadow mode doubles inference cost
+        per request and does not change the answer.
+
+        If v2 fails, it is logged and the comparison is skipped.
         """
         # v1 is the primary — user waits only for this
         v1_result = await asyncio.get_event_loop().run_in_executor(
@@ -153,7 +163,12 @@ class RequestRouter:
                     trace_id=trace_id,
                     error=str(e),
                 )
-                state_machine.record_request("v2", 0.0, error=True)
+                # Do NOT pass a 0.0 latency here. record_request appends it to the
+                # v2 latency window, so every error dragged v2's p99 DOWN --
+                # making the latency rollback least likely to fire exactly
+                # when v2 was failing most. None records the error without
+                # contaminating the latency distribution.
+                state_machine.record_request("v2", None, error=True)
                 result = await asyncio.get_event_loop().run_in_executor(
                     None, self._model_v1.predict, text
                 )

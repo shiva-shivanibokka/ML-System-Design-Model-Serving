@@ -48,7 +48,7 @@ class _InProcessBackend:
     process means one cache, so a dict is not an approximation of Redis here —
     it is the same thing without the network hop or the hosted dependency.
 
-    ponytail: no size bound; entries expire by TTL and the process is
+    NOTE: no size bound; entries expire by TTL and the process is
     short-lived. Add an LRU eviction if it ever holds a long-running instance.
     """
 

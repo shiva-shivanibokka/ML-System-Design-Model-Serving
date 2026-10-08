@@ -21,6 +21,10 @@ class PredictionResult:
     model_version: str  # "v1" | "v2"
     input_text: str  # original input (used for drift/disagreement logging)
     input_length: int  # character count of input_text
+    # True when this result was served from cache without running inference.
+    # Latency aggregation must exclude these: a cache hit has no inference time,
+    # and counting it as 0.0 ms drags every percentile toward zero.
+    from_cache: bool = False
 
 
 @dataclass

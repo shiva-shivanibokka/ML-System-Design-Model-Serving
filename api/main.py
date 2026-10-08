@@ -59,6 +59,7 @@ from api.schemas import (
     ReadinessResponse,
     RollbackResponse,
 )
+from cache.cached_model import CachedModel
 from cache.redis_cache import PredictionCache
 from configs.settings import settings
 from deployment.circuit_breaker import circuit_breaker
@@ -235,7 +236,12 @@ async def lifespan(app: FastAPI):
     update_circuit_breaker_gauge(circuit_breaker.state.value)
 
     # ── Inject models into router ────────────────────────────────────────────
-    request_router.set_models(model_v1, model_v2)
+    # Wrapped, not replaced: the router keeps making the routing decision and
+    # only the model call it ends up making is cached.
+    request_router.set_models(
+        CachedModel(model_v1, cache),
+        CachedModel(model_v2, cache),
+    )
 
     log.info(
         "startup_complete",
@@ -313,30 +319,13 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
     text = request_body.text
     deployment_state = state_machine.state.value
 
-    # ── Cache check ───────────────────────────────────────────────────────
-    # Determine which model version will likely serve (for cache key)
-    # In shadow/rolled_back/canary: primary is v1; in full: primary is v2
-    primary_version = "v2" if deployment_state == "full" else "v1"
-    cached = cache.get(text, primary_version)
-    if cached:
-        CACHE_HITS.labels(model_version=primary_version).inc()
-        INFERENCE_REQUESTS.labels(
-            model_version=f"{primary_version}_cached",
-            deployment_state=deployment_state,
-        ).inc()
-        return PredictResponse(
-            label=cached["label"],
-            score=cached["score"],
-            model_version=cached["model_version"],
-            model_used=cached.get("model_used", primary_version),
-            deployment_state=deployment_state,
-            latency_ms=0.0,
-            cache_hit=True,
-            trace_id=trace_id,
-        )
-    CACHE_MISSES.labels(model_version=primary_version).inc()
-
     # ── Route request ─────────────────────────────────────────────────────
+    # The cache deliberately does NOT sit in front of this. It used to: the key
+    # was chosen from the deployment state and a hit returned immediately, which
+    # meant the canary draw never happened, shadow v2 never ran, and drift never
+    # saw the request. Caching now lives one layer down, in CachedModel, so a
+    # repeat skips inference without skipping the routing decision. See
+    # cache/cached_model.py.
     t0 = time.perf_counter()
     try:
         user_result, shadow_v2_result, model_used = await request_router.route(
@@ -356,11 +345,18 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
     total_latency_ms = (time.perf_counter() - t0) * 1000.0
 
     # ── Prometheus metrics ────────────────────────────────────────────────
-    INFERENCE_LATENCY.labels(
-        model_version=user_result.model_version,
-        deployment_state=deployment_state,
-        cache_hit="false",
-    ).observe(user_result.latency_ms / 1000.0)
+    cache_hit = user_result.from_cache
+    if cache_hit:
+        CACHE_HITS.labels(model_version=user_result.model_version).inc()
+    else:
+        CACHE_MISSES.labels(model_version=user_result.model_version).inc()
+        # Only a real inference has a latency worth aggregating. Observing the
+        # 0.0 of a cache hit would drag every percentile toward zero.
+        INFERENCE_LATENCY.labels(
+            model_version=user_result.model_version,
+            deployment_state=deployment_state,
+            cache_hit="false",
+        ).observe(user_result.latency_ms / 1000.0)
 
     INFERENCE_REQUESTS.labels(
         model_version=model_used,
@@ -385,17 +381,6 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
     )
 
     # ── Cache write ───────────────────────────────────────────────────────
-    cache.set(
-        text,
-        user_result.model_version,
-        {
-            "label": user_result.label,
-            "score": user_result.score,
-            "model_version": user_result.model_version,
-            "model_used": model_used,
-        },
-    )
-
     # ── Update circuit breaker gauge ──────────────────────────────────────
     update_circuit_breaker_gauge(circuit_breaker.state.value)
     update_deployment_gauges(
@@ -421,7 +406,7 @@ async def predict(request_body: PredictRequest, request: Request) -> PredictResp
         model_used=model_used,
         deployment_state=deployment_state,
         latency_ms=round(user_result.latency_ms, 1),
-        cache_hit=False,
+        cache_hit=cache_hit,
         trace_id=trace_id,
     )
 

@@ -34,6 +34,8 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from enum import Enum
 from typing import TypeVar
 
@@ -50,6 +52,10 @@ class CircuitState(str, Enum):
     CLOSED = "closed"  # Normal — requests flow through
     OPEN = "open"  # Tripped — all requests fail-fast to v1
     HALF_OPEN = "half_open"  # Recovery probe — one request allowed
+
+
+class CircuitBreakerTimeoutError(Exception):
+    """A call exceeded call_timeout_seconds and was abandoned by the caller."""
 
 
 class CircuitBreakerOpenError(Exception):
@@ -106,8 +112,7 @@ class CircuitBreaker:
                 if elapsed < self._timeout_seconds:
                     self._total_blocked += 1
                     raise CircuitBreakerOpenError(
-                        f"Circuit OPEN — v2 blocked for "
-                        f"{self._timeout_seconds - elapsed:.0f}s more"
+                        f"Circuit OPEN — v2 blocked for {self._timeout_seconds - elapsed:.0f}s more"
                     )
                 # Timeout elapsed — allow one probe
                 log.info(
@@ -121,12 +126,48 @@ class CircuitBreaker:
         # Execute the call outside the lock to avoid blocking other threads
         self._total_calls += 1
         try:
-            result = fn(*args, **kwargs)
+            result = self._call_with_timeout(fn, *args, **kwargs)
             self._on_success()
             return result
         except Exception as e:
             self._on_failure(str(e))
             raise
+
+    def _call_with_timeout(self, fn, *args, **kwargs):
+        """Run fn, failing the call if it exceeds call_timeout_seconds.
+
+        This used to be absent. `self._call_timeout` was loaded from config and
+        never read by anything, so `fn()` ran unbounded: a 7-second call under a
+        5-second timeout returned normally with failures=0 and the breaker still
+        closed. The class docstring builds the entire case for the breaker on
+        this timeout ("Every request waits call_timeout_seconds before falling
+        back to v1 ... server threads exhausted"), so the one failure mode it
+        exists to catch was the one it could not detect. A hung v2 hung the
+        request forever; only raised exceptions ever tripped it.
+
+        The worker thread is not killed on timeout -- Python cannot safely do
+        that -- so a hung call still occupies its thread. What this changes is
+        that the CALLER stops waiting and the breaker counts a failure, which is
+        what lets the breaker open and shed load to v1.
+        """
+        if not self._call_timeout or self._call_timeout <= 0:
+            return fn(*args, **kwargs)
+
+        # Deliberately NOT a `with` block: ThreadPoolExecutor.__exit__ calls
+        # shutdown(wait=True), which blocks until the worker finishes -- so a
+        # 7-second call under a 5-second timeout still took 7 seconds to return,
+        # and the timeout bought the caller nothing. shutdown(wait=False) lets
+        # the caller leave at the deadline and the orphaned thread finish on its
+        # own.
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = pool.submit(fn, *args, **kwargs)
+            try:
+                return future.result(timeout=self._call_timeout)
+            except FuturesTimeoutError as exc:
+                raise CircuitBreakerTimeoutError(f"call exceeded {self._call_timeout}s") from exc
+        finally:
+            pool.shutdown(wait=False)
 
     def _on_success(self) -> None:
         with self._lock:
@@ -141,8 +182,14 @@ class CircuitBreaker:
                     self._failure_count = 0
                     self._success_count = 0
             elif self._state == CircuitState.CLOSED:
-                # Reset failure count on success (sliding window behaviour)
-                self._failure_count = max(0, self._failure_count - 1)
+                # The threshold counts CONSECUTIVE failures, so one success
+                # starts the count over. This used to decrement by one, which
+                # is a sliding window, not a consecutive count: after 4 failures
+                # and 1 success the count stood at 3, so two more failures
+                # opened the breaker where a true reset would have needed five.
+                # The log line below it has always said "consecutive_failures",
+                # and README describes it that way in two places.
+                self._failure_count = 0
 
     def _on_failure(self, error: str) -> None:
         with self._lock:

@@ -185,8 +185,7 @@ MODEL_READY = Gauge(
 MODEL_WARMUP_LATENCY = Gauge(
     name="model_serving_warmup_latency_seconds",
     documentation=(
-        "First inference latency during warm-up (cold JIT). "
-        "Shows the penalty paid without warm-up."
+        "First inference latency during warm-up (cold JIT). Shows the penalty paid without warm-up."
     ),
     labelnames=["model_version", "pass_number"],
 )
