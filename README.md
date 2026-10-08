@@ -1,5 +1,7 @@
 # ML System Design: Production Model Serving
 
+> **Measured evaluation: [`RESULTS.md`](RESULTS.md)** — an early `return` that silently cancelled the canary, shadow mode and drift detection — the three mechanisms this project exists to demonstrate — plus auto-promotion with no health gate at all.
+
 > [!IMPORTANT]
 > **The hosted demo is switched off.** It ran on Google Cloud Run under a free
 > trial whose billing account has since been closed. The service now returns
